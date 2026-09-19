@@ -154,12 +154,26 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 2. Run Automated Test Suite
+### 2. Configure AI Features (Optional / Recommended)
+The core mathematical optimization engines (PuLP/CBC CFLP solver, Google OR-Tools CVRP router, geospatial matrix, baseline comparisons, and CSV upload) have **zero external API dependencies** and run 100% locally.
+
+To enable the **Conversational Logistics Assistant** (natural language parameter extraction), **AI Synthetic Data Generator**, and **Grounded Per-Page Explainer**, configure your Anthropic API key in `.env`:
+```bash
+# Copy template
+cp .env.example .env
+
+# Edit .env and insert your real Anthropic API key
+# ANTHROPIC_API_KEY=sk-ant-api03-...
+# ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
+```
+*Note: If no `ANTHROPIC_API_KEY` is configured, the core optimizer, maps, and CSV uploads continue to operate with zero degradation; only the AI drawer will display an honest "AI features unavailable — no API key configured" notice.*
+
+### 3. Run Automated Test Suite
 ```bash
 python -m pytest -v
 ```
 
-### 3. Launch Application
+### 4. Launch Application
 ```bash
 uvicorn app:app --reload --port 8000
 ```

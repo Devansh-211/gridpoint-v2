@@ -3,10 +3,15 @@ FastAPI Application Entrypoint (Hack-A-Matics 2026).
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+# Load environment variables from .env file
+load_dotenv()
 
 from optimization.cflp import get_milp_solver, SolverUnavailableError
 from api.routes import router as api_router

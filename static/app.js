@@ -791,23 +791,42 @@ async function checkHealth() {
 }
 
 // ============================================================================
-// 5. DATA INGESTION & DEMO LOADER
+// 5. DATA INGESTION & CANONICAL DATASET LOADER
 // ============================================================================
+
+function applyCanonicalDataset(data, options = {}) {
+  if (!data || !data.preview || data.preview.length === 0) {
+    showErrorModal("Dataset Missing", "No valid delivery zone data was provided.");
+    return false;
+  }
+
+  appState.sessionId = data.session_id || "default";
+  appState.neighborhoods = data.preview;
+  appState.datasetLoaded = true;
+  appState.isSyntheticAi = !!options.isSynthetic;
+  appState.datasetType = options.isSynthetic ? "ai_synthetic" : (options.source || "demo");
+
+  updateSyntheticDatasetBadge(appState.isSyntheticAi);
+  renderDataInputTable(data.preview);
+  renderDemandMap(data.preview);
+  updateDashboardStats();
+  updateLiveSummary();
+
+  if (options.toastMessage) {
+    showToast(options.toastMessage);
+  }
+  return true;
+}
 
 async function loadDemoData() {
   try {
     const res = await fetch("/api/demo-data");
     const data = await res.json();
-    appState.sessionId = data.session_id;
-    appState.neighborhoods = data.preview;
-
-    updateSyntheticDatasetBadge(false);
-    renderDataInputTable(data.preview);
-    renderDemandMap(data.preview);
-    updateDashboardStats();
-    updateLiveSummary();
-
-    showToast(`Loaded 36 curated Bengaluru delivery zones (${data.total_demand.toLocaleString()} orders/day).`);
+    applyCanonicalDataset(data, {
+      isSynthetic: false,
+      source: "demo",
+      toastMessage: `Loaded 36 curated Bengaluru delivery zones (${data.total_demand.toLocaleString()} orders/day).`
+    });
 
     // Auto-trigger default optimization (p=3)
     await runOptimization();
@@ -893,6 +912,14 @@ function renderDemandMap(neighborhoods) {
 // ============================================================================
 
 async function runOptimization() {
+  if (!appState.neighborhoods || appState.neighborhoods.length === 0) {
+    showErrorModal(
+      "No Dataset Loaded",
+      "No delivery zone dataset is currently loaded in memory. Please load the Bengaluru demo dataset, upload a CSV file, or generate AI synthetic data before running optimization."
+    );
+    return;
+  }
+
   const p = parseInt(document.getElementById("inputConfigP").value) || 3;
   const cap = parseFloat(document.getElementById("inputConfigCap").value) || 4000;
   const radius = document.getElementById("inputConfigRadius").value ? parseFloat(document.getElementById("inputConfigRadius").value) : null;
@@ -1639,15 +1666,11 @@ function setupEventListeners() {
         return;
       }
 
-      appState.sessionId = data.session_id;
-      appState.neighborhoods = data.preview;
-      updateSyntheticDatasetBadge(false);
-      renderDataInputTable(data.preview);
-      renderDemandMap(data.preview);
-      updateDashboardStats();
-      updateLiveSummary();
-
-      showToast(`Uploaded ${data.neighborhood_count} zones (${data.total_demand.toLocaleString()} orders/day).`);
+      applyCanonicalDataset(data, {
+        isSynthetic: false,
+        source: "csv",
+        toastMessage: `Uploaded ${data.neighborhood_count} zones (${data.total_demand.toLocaleString()} orders/day).`
+      });
       await runOptimization();
     } catch (err) {
       showErrorModal("Upload Failed", err.message);
@@ -1676,13 +1699,12 @@ function setupEventListeners() {
         showErrorModal("JSON Error", "Validation failed", data.detail?.errors || []);
         return;
       }
-      appState.sessionId = data.session_id;
-      appState.neighborhoods = data.preview;
-      updateSyntheticDatasetBadge(false);
-      renderDataInputTable(data.preview);
-      renderDemandMap(data.preview);
+      applyCanonicalDataset(data, {
+        isSynthetic: false,
+        source: "manual",
+        toastMessage: `Applied ${data.neighborhood_count} zones.`
+      });
       modalManual.classList.remove("active");
-      showToast(`Applied ${data.neighborhood_count} zones.`);
       await runOptimization();
     } catch (err) {
       alert(`Invalid JSON format: ${err.message}`);
@@ -1743,16 +1765,13 @@ function setupEventListeners() {
           return;
         }
 
-        appState.sessionId = data.session_id;
-        appState.neighborhoods = data.preview;
-        updateSyntheticDatasetBadge(true);
-        renderDataInputTable(data.preview);
-        renderDemandMap(data.preview);
-        updateDashboardStats();
-        updateLiveSummary();
+        applyCanonicalDataset(data, {
+          isSynthetic: true,
+          source: "ai_synthetic",
+          toastMessage: `Generated & validated ${data.neighborhood_count} synthetic zones (${data.total_demand.toLocaleString()} orders/day) labeled [AI-Generated Synthetic Dataset].`
+        });
 
         toggleAgentDrawer(false);
-        showToast(`Generated & validated ${data.neighborhood_count} synthetic zones (${data.total_demand.toLocaleString()} orders/day) labeled [AI-Generated Synthetic Dataset].`);
         await runOptimization();
         switchView("viewResults");
       } catch (err) {

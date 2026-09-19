@@ -846,9 +846,11 @@ def generate_synthetic_data(req: SyntheticDataRequest):
             region_name=reg,
         )
         if not is_valid or clean_df is None:
+            err_msg = errors[0] if errors else "Synthetic data generation failed"
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE if any("ANTHROPIC_API_KEY" in e or "unavailable" in e.lower() for e in errors) else status.HTTP_422_UNPROCESSABLE_ENTITY
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail={"errors": errors},
+                status_code=status_code,
+                detail={"error": err_msg, "errors": errors},
             )
 
         session_id = req.session_id if req.session_id and req.session_id != "default" else str(uuid.uuid4())[:8]
