@@ -207,3 +207,63 @@ def test_api_optimize_with_cvrp_and_cache():
     data2 = res2.json()
     assert data2["total_delivery_cost"] == data1["total_delivery_cost"]
     assert data2["cvrp_summary"]["vehicles_deployed"] == cvrp["vehicles_deployed"]
+
+
+def test_api_optimize_auto_size_mode():
+    """Validates /api/optimize in auto_size mode returns solver-chosen warehouse count with system headroom."""
+    payload = {
+        "session_id": "default",
+        "auto_size": True,
+        "p_max": 6,
+        "warehouse_capacity": 4000.0,
+        "cost_per_km": 1.25,
+        "fixed_cost_per_warehouse": 300.0,
+    }
+    res = client.post("/api/optimize", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["auto_size"] is True
+    assert 1 <= data["p"] <= 6
+    assert len(data["warehouses"]) == data["p"]
+    assert "sizing_rationale" in data
+    assert data["sizing_rationale"] is not None
+    assert f"Auto-sized to {data['p']} warehouse" in data["sizing_rationale"]
+    # Check throughput headroom
+    assert data["total_system_capacity"] >= data["total_system_demand"]
+    assert data["capacity_headroom"] >= 0
+    assert data["capacity_headroom_pct"] >= 0
+
+
+def test_api_optimize_auto_size_p_max_exceeds_candidates():
+    """Validates /api/optimize rejects p_max exceeding available candidate sites with diagnostic message."""
+    payload = {
+        "session_id": "default",
+        "auto_size": True,
+        "p_max": 100,  # Demo dataset only has 36 candidate zones
+        "warehouse_capacity": 4000.0,
+    }
+    res = client.post("/api/optimize", json=payload)
+    assert res.status_code == 400
+    data = res.json()
+    assert "detail" in data
+    detail_str = str(data["detail"]).lower()
+    assert "exceeds total candidate sites" in detail_str or "candidate" in detail_str
+
+
+def test_api_optimize_capacity_required_and_headroom_fields():
+    """Validates that warehouses have capacity_required and capacity_ceiling as distinct fields."""
+    payload = {
+        "session_id": "default",
+        "p": 3,
+        "warehouse_capacity": 4000.0,
+    }
+    res = client.post("/api/optimize", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+    for w in data["warehouses"]:
+        assert "capacity_required" in w
+        assert "capacity_ceiling" in w
+        assert w["capacity_required"] == w["assigned_demand"]
+        assert w["capacity_ceiling"] == w["capacity"]
+        assert w["capacity_required"] <= w["capacity_ceiling"]
+

@@ -8,6 +8,7 @@
 const appState = {
   sessionId: "default",
   neighborhoods: [],
+  configMode: "manual", // "manual" or "auto"
   lastOptimize: null,
   lastCompare: null,
   lastTradeoff: null,
@@ -920,7 +921,9 @@ async function runOptimization() {
     return;
   }
 
-  const p = parseInt(document.getElementById("inputConfigP").value) || 3;
+  const isAuto = appState.configMode === "auto";
+  const p = parseInt(document.getElementById("inputConfigP")?.value) || 3;
+  const pMax = parseInt(document.getElementById("inputConfigPMax")?.value) || 6;
   const cap = parseFloat(document.getElementById("inputConfigCap").value) || 4000;
   const radius = document.getElementById("inputConfigRadius").value ? parseFloat(document.getElementById("inputConfigRadius").value) : null;
   const costKm = parseFloat(document.getElementById("inputCostKm").value) || 1.25;
@@ -928,9 +931,21 @@ async function runOptimization() {
   const mode = document.getElementById("selectDistanceMode").value || "haversine";
   const includeCvrp = document.getElementById("chkIncludeCvrp").checked || document.getElementById("chkFleetEnableCvrp").checked;
 
+  // Validate candidate availability
+  if (isAuto && pMax > appState.neighborhoods.length) {
+    showErrorModal(
+      "Invalid Parameter Ceiling",
+      `Requested maximum warehouse count p_max=${pMax} exceeds total candidate sites (${appState.neighborhoods.length}).`,
+      ["You cannot consider more warehouses than available candidate locations. Reduce p_max ceiling or add more zones."]
+    );
+    return;
+  }
+
   const payload = {
     session_id: appState.sessionId,
     p: p,
+    auto_size: isAuto,
+    p_max: isAuto ? pMax : null,
     warehouse_capacity: cap,
     radius_max_km: radius,
     cost_per_km: costKm,
@@ -988,11 +1003,57 @@ function renderResultsScreen(data) {
     <div><strong>Solver Status:</strong> ${data.solver_message}</div>
   `;
 
+  // 1.5 Update Throughput Co-Dependency & Headroom Banner
+  const totalCap = data.total_system_capacity || (data.warehouses ? data.warehouses.reduce((s, w) => s + (w.capacity || w.capacity_ceiling || 0), 0) : 0);
+  const totalDem = data.total_system_demand || (data.assignments ? data.assignments.reduce((s, a) => s + (a.daily_orders || 0), 0) : 0);
+  const headroom = data.capacity_headroom !== undefined ? data.capacity_headroom : (totalCap - totalDem);
+  const headroomPct = data.capacity_headroom_pct !== undefined ? data.capacity_headroom_pct : (totalCap > 0 ? ((totalCap - totalDem) / totalCap * 100) : 0);
+
+  const elThroughput = document.getElementById("resTotalThroughput");
+  if (elThroughput) elThroughput.textContent = `${totalCap.toLocaleString()} orders/day`;
+
+  const elDemand = document.getElementById("resTotalDemand");
+  if (elDemand) elDemand.textContent = `${totalDem.toLocaleString()} orders/day`;
+
+  const elHeadroom = document.getElementById("resCapacityHeadroom");
+  if (elHeadroom) {
+    elHeadroom.textContent = `${headroom >= 0 ? '+' : ''}${headroom.toLocaleString()} orders/day`;
+    elHeadroom.style.color = headroom >= 0 ? "var(--gp-success)" : "var(--gp-danger)";
+  }
+
+  const elHeadroomPct = document.getElementById("resHeadroomPct");
+  if (elHeadroomPct) {
+    elHeadroomPct.textContent = `${headroomPct.toFixed(1)}% buffer`;
+    elHeadroomPct.className = `gp-delta-chip ${headroom >= 0 ? 'gp-delta-positive' : 'gp-delta-negative'}`;
+  }
+
+  const elModeBadge = document.getElementById("resModeBadge");
+  if (elModeBadge) {
+    if (data.auto_size) {
+      elModeBadge.textContent = `Auto-Sized (${data.p} Sites Optimal)`;
+      elModeBadge.className = "gp-badge gp-badge-optimal";
+    } else {
+      elModeBadge.textContent = `Manual Mode (Exact p = ${data.p})`;
+      elModeBadge.className = "gp-badge gp-badge-estimate";
+    }
+  }
+
+  const boxSizing = document.getElementById("boxSizingRationale");
+  const textSizing = document.getElementById("textSizingRationale");
+  if (boxSizing && textSizing) {
+    if (data.auto_size && data.sizing_rationale) {
+      boxSizing.style.display = "flex";
+      textSizing.textContent = data.sizing_rationale;
+    } else {
+      boxSizing.style.display = "none";
+    }
+  }
+
   // 2. Executive KPI Cards
   document.getElementById("kpiCost").textContent = `$${data.total_delivery_cost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   document.getElementById("kpiDistance").innerHTML = `${data.total_weighted_distance_km.toLocaleString(undefined, { maximumFractionDigits: 1 })} <span class="gp-kpi-unit">ord·km</span>`;
   document.getElementById("kpiWarehouses").innerHTML = `${data.warehouses.length} <span class="gp-kpi-unit">sites</span>`;
-  document.getElementById("kpiWarehousesBadge").textContent = `p = ${data.p}`;
+  document.getElementById("kpiWarehousesBadge").textContent = data.auto_size ? `Auto (${data.p} sites)` : `p = ${data.p}`;
   document.getElementById("kpiSolverStatus").textContent = `Status: ${data.status}`;
   document.getElementById("kpiFastDelivery").textContent = `${data.fast_delivery_coverage_pct.toFixed(1)}%`;
   document.getElementById("kpiMonthlySavings").textContent = `$${data.estimated_monthly_savings.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -1053,6 +1114,9 @@ function renderResultsScreen(data) {
       iconAnchor: [16, 16],
     });
 
+    const reqCap = (w.capacity_required !== undefined ? w.capacity_required : w.assigned_demand);
+    const ceilCap = (w.capacity_ceiling !== undefined ? w.capacity_ceiling : w.capacity);
+
     const wMarker = L.marker([w.latitude, w.longitude], { icon: wIcon }).bindPopup(`
       <div style="font-family:var(--gp-font-family-sans); padding:4px;">
         <div style="font-size:11px; color:${color}; font-weight:700; text-transform:uppercase;">Selected Facility</div>
@@ -1060,8 +1124,8 @@ function renderResultsScreen(data) {
         <div style="font-size:11px; color:var(--gp-text-tertiary); font-family:var(--gp-font-family-mono);">${w.warehouse_id}</div>
         <hr style="margin:6px 0; border:0; border-top:1px solid var(--gp-border);">
         <div style="font-size:12px; color:var(--gp-text-secondary); line-height:1.5;">
-          <strong>Throughput Demand:</strong> ${w.assigned_demand.toLocaleString()} orders/day<br>
-          <strong>Site Capacity:</strong> ${w.capacity.toLocaleString()} orders/day<br>
+          <strong>Capacity Required:</strong> ${reqCap.toLocaleString()} orders/day<br>
+          <strong>Capacity Ceiling:</strong> ${ceilCap.toLocaleString()} orders/day<br>
           <strong>Capacity Utilization:</strong> ${w.capacity_utilization_pct.toFixed(1)}%<br>
           <strong>Zones Served:</strong> ${w.neighborhoods_count} delivery zones
         </div>
@@ -1410,18 +1474,21 @@ function renderWarehouseManifestTable(warehouses) {
     return;
   }
 
-  tbody.innerHTML = warehouses.map(w => `
+  tbody.innerHTML = warehouses.map(w => {
+    const reqCap = (w.capacity_required !== undefined ? w.capacity_required : w.assigned_demand);
+    const ceilCap = (w.capacity_ceiling !== undefined ? w.capacity_ceiling : w.capacity);
+    return `
     <tr>
       <td><span style="font-family:var(--gp-font-family-mono); font-weight:700;">${w.warehouse_id}</span></td>
       <td><strong>${w.name}</strong></td>
-      <td>${w.assigned_demand.toLocaleString()} orders/day</td>
-      <td>${w.capacity.toLocaleString()} orders/day</td>
+      <td><span style="font-family:var(--gp-font-family-mono); font-weight:700;">${reqCap.toLocaleString()}</span> <span style="font-size:11px; color:var(--gp-text-tertiary);">ord/day</span></td>
+      <td><span style="font-family:var(--gp-font-family-mono);">${ceilCap.toLocaleString()}</span> <span style="font-size:11px; color:var(--gp-text-tertiary);">ord/day</span></td>
       <td>
         <div style="display:flex; align-items:center; gap:8px;">
           <div style="flex:1; height:6px; background:var(--gp-surface-sunken); border-radius:3px; overflow:hidden; min-width:60px;">
             <div style="width:${Math.min(100, w.capacity_utilization_pct)}%; height:100%; background:${w.capacity_utilization_pct > 90 ? 'var(--gp-danger)' : 'var(--gp-primary-500)'};"></div>
           </div>
-          <span style="font-family:var(--gp-font-family-mono); font-size:11px; font-weight:700;">${w.capacity_utilization_pct.toFixed(1)}%</span>
+          <span class="gp-delta-chip ${w.capacity_utilization_pct > 90 ? 'gp-delta-warning' : 'gp-delta-positive'}">${w.capacity_utilization_pct.toFixed(1)}%</span>
         </div>
       </td>
       <td>${w.neighborhoods_count} zones</td>
@@ -1429,7 +1496,8 @@ function renderWarehouseManifestTable(warehouses) {
         <button class="gp-btn gp-btn-secondary gp-btn-sm" onclick="inspectWarehouseFacility('${w.warehouse_id}')">Inspect</button>
       </td>
     </tr>
-  `).join("");
+  `;
+  }).join("");
 }
 
 function inspectWarehouseFacility(wId) {
@@ -1588,15 +1656,24 @@ function updateDashboardStats() {
 }
 
 function updateLiveSummary() {
-  const p = parseInt(document.getElementById("inputConfigP").value) || 3;
+  const isAuto = appState.configMode === "auto";
   const cap = parseFloat(document.getElementById("inputConfigCap").value) || 4000;
   const radiusVal = document.getElementById("inputConfigRadius").value;
   const nZones = appState.neighborhoods.length || 36;
-  const totalCap = p * cap;
-
   let radiusText = radiusVal ? ` within <strong>${radiusVal} km</strong> radius` : "";
   const box = document.getElementById("configLiveSummaryText");
-  if (box) {
+  if (!box) return;
+
+  if (isAuto) {
+    const pMax = parseInt(document.getElementById("inputConfigPMax")?.value) || 6;
+    if (appState.lastOptimize && appState.lastOptimize.auto_size) {
+      box.innerHTML = `The lowest-cost network uses <strong>${appState.lastOptimize.p} warehouses</strong> (from up to ${pMax} considered) serving <strong>${nZones} delivery zones</strong>.`;
+    } else {
+      box.innerHTML = `Choosing the lowest-cost network of up to <strong>${pMax} warehouses</strong> to minimize total cost (delivery transit + facility leases)${radiusText}.`;
+    }
+  } else {
+    const p = parseInt(document.getElementById("inputConfigP")?.value) || 3;
+    const totalCap = p * cap;
     box.innerHTML = `You are planning a <strong>${p}-warehouse</strong> network serving <strong>${nZones} delivery zones</strong> with <strong>${totalCap.toLocaleString()} orders/day</strong> combined capacity${radiusText}.`;
   }
 }
@@ -1782,14 +1859,55 @@ function setupEventListeners() {
     });
   }
 
-  // 7. Configuration View Controls
+  // 7. Configuration View Controls & Mode Switcher
+  const btnModeMan = document.getElementById("btnConfigModeManual");
+  const btnModeAut = document.getElementById("btnConfigModeAuto");
+  const boxManualP = document.getElementById("containerManualP");
+  const boxAutoPMax = document.getElementById("containerAutoPMax");
+
+  if (btnModeMan && btnModeAut) {
+    btnModeMan.addEventListener("click", () => {
+      appState.configMode = "manual";
+      btnModeMan.classList.add("active");
+      btnModeAut.classList.remove("active");
+      if (boxManualP) boxManualP.style.display = "flex";
+      if (boxAutoPMax) boxAutoPMax.style.display = "none";
+      updateLiveSummary();
+    });
+
+    btnModeAut.addEventListener("click", () => {
+      appState.configMode = "auto";
+      btnModeAut.classList.add("active");
+      btnModeMan.classList.remove("active");
+      if (boxManualP) boxManualP.style.display = "none";
+      if (boxAutoPMax) {
+        boxAutoPMax.style.display = "flex";
+        const sliderPMax = document.getElementById("inputConfigPMax");
+        if (sliderPMax && appState.neighborhoods.length > 0) {
+          sliderPMax.max = Math.max(1, appState.neighborhoods.length);
+        }
+      }
+      updateLiveSummary();
+    });
+  }
+
   const inputP = document.getElementById("inputConfigP");
-  inputP.addEventListener("input", (e) => {
-    document.getElementById("valConfigP").textContent = `${e.target.value} sites`;
-    updateLiveSummary();
-    updateDashboardStats();
-    agentState.knownParams.warehouse_count = parseInt(e.target.value) || 3;
-  });
+  if (inputP) {
+    inputP.addEventListener("input", (e) => {
+      document.getElementById("valConfigP").textContent = `${e.target.value} sites`;
+      updateLiveSummary();
+      updateDashboardStats();
+      agentState.knownParams.warehouse_count = parseInt(e.target.value) || 3;
+    });
+  }
+
+  const inputPMax = document.getElementById("inputConfigPMax");
+  if (inputPMax) {
+    inputPMax.addEventListener("input", (e) => {
+      document.getElementById("valConfigPMax").textContent = `${e.target.value} sites`;
+      updateLiveSummary();
+    });
+  }
 
   const inputCap = document.getElementById("inputConfigCap");
   inputCap.addEventListener("input", (e) => {

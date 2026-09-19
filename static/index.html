@@ -412,23 +412,51 @@
             
             <div class="gp-form-grid">
               
-              <!-- Card 1: Facility Parameters -->
+              <!-- Card 1: Facility Parameters & Mode -->
               <div class="gp-card">
                 <div class="gp-card-header">
                   <div class="gp-card-title">1. Strategic Facility Parameters</div>
                 </div>
                 <div class="gp-card-body" style="display:flex; flex-direction:column; gap:var(--gp-space-4);">
-                  <div class="gp-form-group">
+                  
+                  <!-- Mode Switcher -->
+                  <div>
+                    <div class="gp-label" style="margin-bottom:var(--gp-space-1);">Optimization Mode:</div>
+                    <div class="gp-mode-toggle" id="configModeToggle">
+                      <button type="button" class="gp-mode-btn active" id="btnConfigModeManual" data-mode="manual">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                        <span>Manual (Exact Count)</span>
+                      </button>
+                      <button type="button" class="gp-mode-btn" id="btnConfigModeAuto" data-mode="auto">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg>
+                        <span>Auto-Size (Minimize Cost)</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Manual Mode: Exact Count (p) -->
+                  <div class="gp-form-group" id="containerManualP">
                     <div class="gp-label">
                       <span>Warehouse Count (p)</span>
                       <span class="gp-label-val" id="valConfigP">3 sites</span>
                     </div>
-                    <input type="range" class="gp-range" id="inputConfigP" min="1" max="5" value="3" step="1">
+                    <input type="range" class="gp-range" id="inputConfigP" min="1" max="20" value="3" step="1">
+                    <div style="font-size:11px; color:var(--gp-text-tertiary); margin-top:2px;">Solver selects locations and assignments for exactly this number of facilities.</div>
+                  </div>
+
+                  <!-- Auto-Size Mode: Upper Ceiling (p_max) -->
+                  <div class="gp-form-group" id="containerAutoPMax" style="display:none;">
+                    <div class="gp-label">
+                      <span>Max Warehouses to Consider (p_max)</span>
+                      <span class="gp-label-val" id="valConfigPMax">6 sites</span>
+                    </div>
+                    <input type="range" class="gp-range" id="inputConfigPMax" min="1" max="20" value="6" step="1">
+                    <div style="font-size:11px; color:var(--gp-text-tertiary); margin-top:2px;">Solver determines cost-minimizing count k ≤ p_max trading off transit vs lease costs.</div>
                   </div>
 
                   <div class="gp-form-group">
                     <div class="gp-label">
-                      <span>Site Throughput Capacity</span>
+                      <span>Per-Warehouse Capacity Ceiling</span>
                       <span class="gp-label-val" id="valConfigCap">4,000 orders/day</span>
                     </div>
                     <input type="number" class="gp-input" id="inputConfigCap" value="4000" min="500" max="25000" step="250">
@@ -531,6 +559,37 @@
               <div><strong>Max Service Radius:</strong> No Limit</div>
               <div><strong>Distance Metric:</strong> Geographic Delivery Distance (Haversine)</div>
               <div><strong>Solver Message:</strong> Optimal solution found</div>
+            </div>
+
+            <!-- Throughput Co-Dependency & Headroom Banner -->
+            <div class="gp-throughput-banner" id="resultsThroughputBanner">
+              <div class="gp-throughput-items">
+                <div class="gp-throughput-stat">
+                  <span class="gp-throughput-stat-label">Total System Throughput</span>
+                  <span class="gp-throughput-stat-value" id="resTotalThroughput">12,000 orders/day</span>
+                </div>
+                <div style="color:var(--gp-border-strong); font-size:18px;">vs</div>
+                <div class="gp-throughput-stat">
+                  <span class="gp-throughput-stat-label">Total Daily Demand</span>
+                  <span class="gp-throughput-stat-value" id="resTotalDemand">5,420 orders/day</span>
+                </div>
+                <div class="gp-throughput-stat">
+                  <span class="gp-throughput-stat-label">Net Capacity Headroom</span>
+                  <div style="display:flex; align-items:center; gap:6px;">
+                    <span class="gp-throughput-stat-value" id="resCapacityHeadroom" style="color:var(--gp-success);">+6,580 orders/day</span>
+                    <span class="gp-delta-chip gp-delta-positive" id="resHeadroomPct">54.8% buffer</span>
+                  </div>
+                </div>
+              </div>
+              <div id="resModeBadgeContainer">
+                <span class="gp-badge gp-badge-optimal" id="resModeBadge">Manual Mode (Exact p)</span>
+              </div>
+            </div>
+
+            <!-- Auto-Sizing Decision Rationale Callout -->
+            <div class="gp-sizing-rationale-box" id="boxSizingRationale" style="display:none;">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0; color:var(--gp-primary-600); margin-top:2px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+              <div id="textSizingRationale">The solver selected the cost-minimizing warehouse count by balancing transit and lease costs.</div>
             </div>
 
             <!-- Executive KPI Row -->
@@ -707,8 +766,8 @@
                         <tr>
                           <th>Facility ID</th>
                           <th>Warehouse Location</th>
-                          <th>Assigned Demand (orders/day)</th>
-                          <th>Site Capacity</th>
+                          <th>Capacity Required</th>
+                          <th>Capacity Ceiling</th>
                           <th>Utilization</th>
                           <th>Zones Served</th>
                           <th>Action</th>

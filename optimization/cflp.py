@@ -128,26 +128,98 @@ def solve_cflp_heuristic(
     p_warehouses: int,
     duration_matrix_min: Dict[str, Dict[str, float]],
     t_max_minutes: Optional[float] = None,
+    auto_size: bool = False,
+    p_max: Optional[int] = None,
+    cost_per_km: float = 1.25,
+    fixed_cost_per_warehouse: float = 300.0,
 ) -> CFLPResult:
     """Greedy + 2-Opt Local Search Heuristic for Capacitated Facility Location.
     
+    Supports both exact warehouse count (Manual mode) and cost-minimizing auto-sizing (Auto mode).
     Guarantees fast, robust, feasible solutions if MILP solver binaries are not installed.
     """
     start_time = time.time()
     demands = {n.id: float(n.daily_orders) for n in neighborhoods}
     capacities = {c.id: float(c.capacity) for c in candidates}
     candidate_ids = [c.id for c in candidates]
+    total_demand = sum(demands.values())
 
-    if p_warehouses <= 0 or not candidate_ids:
+    if not candidate_ids:
         return CFLPResult(
             status="Infeasible",
-            solver_message="Invalid candidate pool or p <= 0",
+            solver_message="Invalid candidate pool (empty)",
             is_optimal=False,
             open_warehouse_ids=[],
             assignments={},
             weighted_strategic_travel_time=0.0,
             solve_time_seconds=time.time() - start_time,
-            diagnostics=["Candidate pool empty or p <= 0"],
+            diagnostics=["Candidate pool is empty."],
+        )
+
+    # If Auto-size mode, sweep k from 1 to p_max (or len(candidates)) and pick lowest total cost
+    if auto_size:
+        max_k = min(len(candidate_ids), p_max if p_max is not None and p_max >= 1 else min(10, len(candidate_ids)))
+        best_overall_cost = float("inf")
+        best_result: Optional[CFLPResult] = None
+
+        sorted_caps = sorted(capacities.values(), reverse=True)
+
+        for k in range(1, max_k + 1):
+            if sum(sorted_caps[:k]) < total_demand:
+                continue  # Cannot satisfy total capacity with k warehouses
+
+            # Run heuristic for count k
+            k_res = solve_cflp_heuristic(
+                neighborhoods=neighborhoods,
+                candidates=candidates,
+                p_warehouses=k,
+                duration_matrix_min=duration_matrix_min,
+                t_max_minutes=t_max_minutes,
+                auto_size=False,
+            )
+
+            if k_res.status.startswith("Feasible") or k_res.is_optimal:
+                deliv_cost = k_res.weighted_strategic_travel_time * (cost_per_km / 50.0)
+                infra_cost = len(k_res.open_warehouse_ids) * fixed_cost_per_warehouse
+                total_cost = deliv_cost + infra_cost
+
+                if total_cost < best_overall_cost:
+                    best_overall_cost = total_cost
+                    best_result = k_res
+
+        if best_result is not None:
+            return CFLPResult(
+                status="Feasible (Heuristic Fallback)",
+                solver_message=f"Feasible auto-sized network found via heuristic sweep: {len(best_result.open_warehouse_ids)} warehouses selected (lowest total cost: ${best_overall_cost:,.2f}/day)",
+                is_optimal=False,
+                open_warehouse_ids=best_result.open_warehouse_ids,
+                assignments=best_result.assignments,
+                weighted_strategic_travel_time=best_result.weighted_strategic_travel_time,
+                solve_time_seconds=time.time() - start_time,
+                diagnostics=[],
+            )
+        else:
+            return CFLPResult(
+                status="Infeasible",
+                solver_message="No feasible warehouse count configuration found within candidate pool.",
+                is_optimal=False,
+                open_warehouse_ids=[],
+                assignments={},
+                weighted_strategic_travel_time=0.0,
+                solve_time_seconds=time.time() - start_time,
+                diagnostics=["Could not find feasible assignments within capacity and radius bounds."],
+            )
+
+    if p_warehouses <= 0:
+        return CFLPResult(
+            status="Infeasible",
+            solver_message="p <= 0",
+            is_optimal=False,
+            open_warehouse_ids=[],
+            assignments={},
+            weighted_strategic_travel_time=0.0,
+            solve_time_seconds=time.time() - start_time,
+            diagnostics=["p <= 0"],
         )
 
     # 1. Greedy initial selection: Score candidates by standalone demand-weighted centrality
@@ -206,19 +278,21 @@ def solve_cflp_heuristic(
 def solve_cflp(
     neighborhoods: List[Neighborhood],
     candidates: List[WarehouseCandidate],
-    p_warehouses: int,
-    duration_matrix_min: Dict[str, Dict[str, float]],
+    p_warehouses: int = 3,
+    duration_matrix_min: Dict[str, Dict[str, float]] = None,
     t_max_minutes: Optional[float] = None,
     time_limit_seconds: int = 60,
+    auto_size: bool = False,
+    p_max: Optional[int] = None,
+    cost_per_km: float = 1.25,
+    fixed_cost_per_warehouse: float = 300.0,
 ) -> CFLPResult:
     """Solves the Capacitated Facility Location Problem (CFLP).
 
-    Minimizes Weighted Strategic Travel Time (orders * minutes/km).
-    Enforces:
-      - exactly p warehouses open
-      - single assignment per neighborhood
-      - warehouse capacity constraints
-      - maximum service time T_max radius constraints
+    Supports:
+      - Manual mode (auto_size=False): Enforces exact p warehouses open (Σ y_j = p).
+      - Auto-size mode (auto_size=True): Treats warehouse count as an optimal decision variable,
+        minimizing Total Cost = Delivery Transit Cost + Fixed Facility Lease Cost, bounded by p_max.
     
     If CBC MILP solver is not available, gracefully uses the greedy + local search heuristic.
     """
@@ -228,15 +302,22 @@ def solve_cflp(
     neighborhood_ids = [n.id for n in neighborhoods]
     candidate_ids = [c.id for c in candidates]
 
+    # Bound p_max in auto-size mode
+    effective_p = p_warehouses
+    if auto_size:
+        effective_p_max = p_max if p_max is not None and p_max >= 1 else min(10, len(candidate_ids))
+        effective_p = effective_p_max
+
     # Pre-solve feasibility checks
     is_feasible, diagnostics = validate_presolve_feasibility(
         neighborhood_ids=neighborhood_ids,
         demands=demands,
         candidate_ids=candidate_ids,
         capacities=capacities,
-        p_warehouses=p_warehouses,
+        p_warehouses=effective_p,
         duration_matrix_min=duration_matrix_min,
         t_max_minutes=t_max_minutes,
+        auto_size=auto_size,
     )
 
     if not is_feasible:
@@ -262,7 +343,12 @@ def solve_cflp(
             p_warehouses=p_warehouses,
             duration_matrix_min=duration_matrix_min,
             t_max_minutes=t_max_minutes,
+            auto_size=auto_size,
+            p_max=p_max,
+            cost_per_km=cost_per_km,
+            fixed_cost_per_warehouse=fixed_cost_per_warehouse,
         )
+
 
     # Initialize PuLP MILP Model
     prob = pulp.LpProblem("GRIDPOINT_CFLP", pulp.LpMinimize)
@@ -283,11 +369,20 @@ def solve_cflp(
                 x[(i, j)] = pulp.LpVariable(f"x_{i}_{j}", cat=pulp.LpBinary)
                 valid_pairs.append((i, j))
 
-    # Objective: Minimize Weighted Strategic Travel Time (daily_orders * travel_time)
-    prob += pulp.lpSum(
-        demands[i] * duration_matrix_min[j][i] * x[(i, j)]
-        for (i, j) in valid_pairs
-    )
+    # Objective: Minimize Total Cost (in Auto-size mode) or Weighted Travel Distance (in Manual mode)
+    if auto_size:
+        prob += (
+            pulp.lpSum(
+                demands[i] * duration_matrix_min[j][i] * (cost_per_km / 50.0) * x[(i, j)]
+                for (i, j) in valid_pairs
+            )
+            + pulp.lpSum(fixed_cost_per_warehouse * y[j] for j in candidate_ids)
+        )
+    else:
+        prob += pulp.lpSum(
+            demands[i] * duration_matrix_min[j][i] * x[(i, j)]
+            for (i, j) in valid_pairs
+        )
 
     # Constraint 1: Every neighborhood assigned to exactly one warehouse
     for i in neighborhood_ids:
@@ -317,8 +412,15 @@ def solve_cflp(
         else:
             prob += y[j] * 0 <= capacities[j]
 
-    # Constraint 4: Exactly p warehouses open
-    prob += pulp.lpSum(y[j] for j in candidate_ids) == p_warehouses, "Exact_P_Warehouses"
+    # Constraint 4: Warehouse Count Constraint
+    if auto_size:
+        # In Auto-size mode: Drop exact equality constraint!
+        prob += pulp.lpSum(y[j] for j in candidate_ids) >= 1, "At_Least_One_Warehouse"
+        if effective_p is not None and effective_p < len(candidate_ids):
+            prob += pulp.lpSum(y[j] for j in candidate_ids) <= effective_p, f"Max_{effective_p}_Warehouses"
+    else:
+        # In Manual mode: Enforce exact p warehouses open
+        prob += pulp.lpSum(y[j] for j in candidate_ids) == p_warehouses, "Exact_P_Warehouses"
 
     # Solve using CBC
     try:
@@ -331,6 +433,10 @@ def solve_cflp(
             p_warehouses=p_warehouses,
             duration_matrix_min=duration_matrix_min,
             t_max_minutes=t_max_minutes,
+            auto_size=auto_size,
+            p_max=p_max,
+            cost_per_km=cost_per_km,
+            fixed_cost_per_warehouse=fixed_cost_per_warehouse,
         )
 
     elapsed = time.time() - start_time
@@ -364,7 +470,15 @@ def solve_cflp(
         if pulp.value(x[(i, j)]) is not None and pulp.value(x[(i, j)]) > 0.5:
             assignments[i] = j
 
-    obj_val = float(pulp.value(prob.objective)) if pulp.value(prob.objective) is not None else 0.0
+    # Always compute raw total order-km distance
+    raw_weighted_distance = sum(
+        demands[i] * duration_matrix_min.get(assignments[i], {}).get(i, 0.0)
+        for i in neighborhood_ids
+        if i in assignments
+    )
+
+    if auto_size:
+        solver_msg = f"Optimal auto-sized network verified: {len(open_warehouses)} warehouse(s) opened to minimize combined delivery and fixed costs."
 
     return CFLPResult(
         status="Optimal" if is_optimal else "Feasible",
@@ -372,7 +486,8 @@ def solve_cflp(
         is_optimal=is_optimal,
         open_warehouse_ids=open_warehouses,
         assignments=assignments,
-        weighted_strategic_travel_time=obj_val,
+        weighted_strategic_travel_time=raw_weighted_distance,
         solve_time_seconds=elapsed,
         diagnostics=[],
     )
+

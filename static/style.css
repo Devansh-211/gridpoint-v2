@@ -1650,6 +1650,104 @@ input[type="range"].gp-range {
 }
 
 /* ==========================================================================
+   AUTO-SIZED WAREHOUSE NETWORK & THROUGHPUT METRICS
+   ========================================================================== */
+.gp-mode-toggle {
+  display: flex;
+  background-color: var(--gp-surface-sunken);
+  border: 1px solid var(--gp-border);
+  border-radius: var(--gp-radius-md);
+  padding: 3px;
+  gap: 3px;
+  margin-bottom: var(--gp-space-3);
+}
+
+.gp-mode-btn {
+  flex: 1;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: var(--gp-weight-semibold);
+  color: var(--gp-text-secondary);
+  border: none;
+  background: transparent;
+  border-radius: var(--gp-radius-sm);
+  cursor: pointer;
+  transition: all var(--gp-transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.gp-mode-btn:hover:not(.active) {
+  color: var(--gp-text-primary);
+  background-color: rgba(0, 0, 0, 0.03);
+}
+
+.gp-mode-btn.active {
+  background-color: var(--gp-surface);
+  color: var(--gp-primary-600);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  font-weight: var(--gp-weight-bold);
+  border: 1px solid var(--gp-primary-100);
+}
+
+.gp-throughput-banner {
+  background: linear-gradient(135deg, var(--gp-primary-50) 0%, var(--gp-surface) 100%);
+  border: 1px solid var(--gp-primary-100);
+  border-radius: var(--gp-radius-md);
+  padding: var(--gp-space-3) var(--gp-space-4);
+  margin-bottom: var(--gp-space-4);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--gp-space-3);
+}
+
+.gp-throughput-items {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--gp-space-5);
+}
+
+.gp-throughput-stat {
+  display: flex;
+  flex-direction: column;
+}
+
+.gp-throughput-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  font-weight: var(--gp-weight-bold);
+  color: var(--gp-text-tertiary);
+  letter-spacing: 0.5px;
+}
+
+.gp-throughput-stat-value {
+  font-size: 15px;
+  font-weight: var(--gp-weight-bold);
+  color: var(--gp-text-primary);
+  font-family: var(--gp-font-family-mono);
+  margin-top: 1px;
+}
+
+.gp-sizing-rationale-box {
+  background-color: var(--gp-primary-50);
+  border: 1px solid var(--gp-primary-200);
+  border-left: 4px solid var(--gp-primary-500);
+  border-radius: var(--gp-radius-sm);
+  padding: var(--gp-space-3) var(--gp-space-4);
+  margin-bottom: var(--gp-space-4);
+  font-size: 13px;
+  color: var(--gp-text-primary);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--gp-space-3);
+}
+
+/* ==========================================================================
    RESPONSIVENESS (MOBILE / TABLET BREAKPOINT)
    ========================================================================== */
 @media (max-width: 900px) {
@@ -1678,4 +1776,5 @@ input[type="range"].gp-range {
     width: 100vw;
   }
 }
+
 

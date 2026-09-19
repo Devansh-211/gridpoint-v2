@@ -59,7 +59,7 @@ EMISSIONS_KG_PER_KM = 0.21
 def _compute_solve_cache_key(req: OptimizeRequest, session_id: str) -> str:
     """Computes deterministic hash for request parameters to prevent redundant CPU solves."""
     raw = (
-        f"{session_id}_{req.p}_{req.warehouse_capacity}_{req.radius_max_km}_"
+        f"{session_id}_{req.p}_{req.auto_size}_{req.p_max}_{req.warehouse_capacity}_{req.radius_max_km}_"
         f"{req.cost_per_km}_{req.fixed_cost_per_warehouse}_{req.routing_mode}_"
         f"{req.priority_preset}_{req.include_cvrp}_{req.vehicle_capacity}_{req.vehicle_fixed_cost}"
     )
@@ -290,15 +290,34 @@ def optimize_network(req: OptimizeRequest):
     matrix = get_matrix(neighborhoods, mode=req.routing_mode)
     session["last_matrix"] = matrix
 
+    # Determine validation count and auto_size bounds
+    p_max_to_use = req.p_max if req.p_max is not None and req.p_max >= 1 else min(10, len(candidates))
+    if req.auto_size and req.p_max is not None and req.p_max > len(candidates):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "Invalid Parameter Ceiling",
+                "diagnostics": [
+                    f"Requested maximum warehouse count p_max={req.p_max} exceeds total candidate sites ({len(candidates)}). "
+                    f"You cannot consider more warehouses than available candidate locations."
+                ],
+                "p_max": req.p_max,
+                "candidate_count": len(candidates),
+            },
+        )
+
+    p_to_validate = p_max_to_use if req.auto_size else req.p
+
     # Pre-solve feasibility checks
     is_feasible, diagnostics = validate_presolve_feasibility(
         neighborhood_ids=[n.id for n in neighborhoods],
         demands={n.id: n.daily_orders for n in neighborhoods},
         candidate_ids=[c.id for c in candidates],
         capacities={c.id: c.capacity for c in candidates},
-        p_warehouses=req.p,
+        p_warehouses=p_to_validate,
         duration_matrix_min=matrix.distances_km,
         t_max_minutes=effective_radius,
+        auto_size=req.auto_size,
     )
 
     if not is_feasible:
@@ -308,6 +327,8 @@ def optimize_network(req: OptimizeRequest):
                 "error": "Optimization Infeasible",
                 "diagnostics": diagnostics,
                 "p": req.p,
+                "p_max": req.p_max,
+                "auto_size": req.auto_size,
                 "warehouse_capacity": req.warehouse_capacity,
             },
         )
@@ -319,6 +340,10 @@ def optimize_network(req: OptimizeRequest):
         p_warehouses=req.p,
         duration_matrix_min=matrix.distances_km,
         t_max_minutes=effective_radius,
+        auto_size=req.auto_size,
+        p_max=req.p_max,
+        cost_per_km=effective_cost_per_km,
+        fixed_cost_per_warehouse=req.fixed_cost_per_warehouse,
     )
 
     if not cflp_res.is_optimal and not cflp_res.status.startswith("Feasible") and cflp_res.status != "Optimal":
@@ -335,6 +360,7 @@ def optimize_network(req: OptimizeRequest):
     updated_candidates = process_assignments(candidates, neighborhoods, cflp_res)
     cand_map = {c.id: c for c in updated_candidates}
     n_map = {n.id: n for n in neighborhoods}
+    actual_p = len(cflp_res.open_warehouse_ids)
 
     # Format warehouse summaries
     warehouses_summary: List[WarehouseSummary] = []
@@ -349,6 +375,8 @@ def optimize_network(req: OptimizeRequest):
                 longitude=c.longitude,
                 capacity=c.capacity,
                 assigned_demand=c.total_assigned_demand,
+                capacity_required=c.total_assigned_demand,
+                capacity_ceiling=c.capacity,
                 capacity_utilization_pct=round(util_pct, 1),
                 neighborhoods_count=len(c.assigned_neighborhood_ids),
             )
@@ -389,26 +417,41 @@ def optimize_network(req: OptimizeRequest):
     # Delivery distance and cost calculation
     total_weighted_dist = cflp_res.weighted_strategic_travel_time
     avg_dist_km = round(total_weighted_dist / max(1.0, total_demand), 2)
-    delivery_cost = round(total_weighted_dist * (req.cost_per_km / 50.0), 2)
-    infra_cost = round(req.p * req.fixed_cost_per_warehouse, 2)
+    delivery_cost = round(total_weighted_dist * (effective_cost_per_km / 50.0), 2)
+    infra_cost = round(actual_p * req.fixed_cost_per_warehouse, 2)
     combined_cost = round(delivery_cost + infra_cost, 2)
 
+    # Throughput & Headroom metrics
+    total_system_capacity = sum(w.capacity for w in warehouses_summary)
+    capacity_headroom = round(total_system_capacity - total_demand, 1)
+    capacity_headroom_pct = round(((total_system_capacity - total_demand) / max(1.0, total_system_capacity)) * 100.0, 1)
+
+    # Plain language sizing rationale
+    if req.auto_size:
+        sizing_rationale = (
+            f"Auto-sized to {actual_p} warehouse(s) (from up to {p_max_to_use} considered). "
+            f"The mathematical solver selected {actual_p} facilities to minimize combined daily costs: "
+            f"${delivery_cost:,.2f} transit + ${infra_cost:,.2f} infrastructure = ${combined_cost:,.2f}/day total."
+        )
+    else:
+        sizing_rationale = (
+            f"Manual exact configuration: exactly {actual_p} warehouse(s) opened per user constraint."
+        )
+
     # Baseline comparison for monthly savings & CO2 calculation
-    # 1-median center reference
     min_base_weighted_dist = float("inf")
     for cand in neighborhoods:
         w_d = sum(n.daily_orders * matrix.distances_km.get(cand.id, {}).get(n.id, 0.0) for n in neighborhoods)
         if w_d < min_base_weighted_dist:
             min_base_weighted_dist = w_d
 
-    base_deliv_cost = round(min_base_weighted_dist * (req.cost_per_km / 50.0), 2)
+    base_deliv_cost = round(min_base_weighted_dist * (effective_cost_per_km / 50.0), 2)
     base_infra_cost = round(1 * req.fixed_cost_per_warehouse, 2)
     base_combined = round(base_deliv_cost + base_infra_cost, 2)
     daily_savings = max(0.0, base_combined - combined_cost)
     monthly_savings = round(daily_savings * 30.0, 2)
 
     # CO2 emissions estimation (0.21 kg/km per vehicle round-trip estimate)
-    # Estimate total daily fleet distance as ~2x weighted average distance * order clusters
     opt_co2 = round((total_weighted_dist / max(1.0, total_demand) * len(neighborhoods) * 2.0) * EMISSIONS_KG_PER_KM, 1)
     base_co2 = round((min_base_weighted_dist / max(1.0, total_demand) * len(neighborhoods) * 2.0) * EMISSIONS_KG_PER_KM, 1)
     co2_reduc_pct = safe_pct_change(opt_co2, base_co2)
@@ -420,13 +463,16 @@ def optimize_network(req: OptimizeRequest):
         "radius_max_km": effective_radius,
         "routing_mode": req.routing_mode,
         "priority_preset": req.priority_preset or "cost",
-        "p": req.p,
+        "p": actual_p,
+        "auto_size": req.auto_size,
+        "p_max": req.p_max,
         "include_cvrp": req.include_cvrp,
         "vehicle_capacity": req.vehicle_capacity,
         "vehicle_fixed_cost": req.vehicle_fixed_cost,
         "time_window_start": req.time_window_start,
         "time_window_end": req.time_window_end,
     }
+
 
     # Optional CVRP routing refinement if requested
     cvrp_summary = None
@@ -500,12 +546,18 @@ def optimize_network(req: OptimizeRequest):
         status="Optimal" if cflp_res.is_optimal else ("Feasible (Heuristic)" if "Heuristic" in cflp_res.status else "Feasible"),
         solver_message=cflp_res.solver_message,
         is_optimal=cflp_res.is_optimal,
-        p=req.p,
+        p=actual_p,
+        auto_size=req.auto_size,
         total_weighted_distance_km=round(total_weighted_dist, 1),
         average_distance_km=avg_dist_km,
         total_delivery_cost=delivery_cost,
         total_infrastructure_cost=infra_cost,
         combined_total_cost=combined_cost,
+        total_system_capacity=round(total_system_capacity, 1),
+        total_system_demand=round(total_demand, 1),
+        capacity_headroom=capacity_headroom,
+        capacity_headroom_pct=capacity_headroom_pct,
+        sizing_rationale=sizing_rationale,
         coverage_percentage=cov_pct,
         fast_delivery_coverage_pct=fast_cov_pct,
         unserved_demand=0.0,
@@ -518,6 +570,7 @@ def optimize_network(req: OptimizeRequest):
         assignments=assignments_list,
         cvrp_summary=cvrp_summary,
     )
+
 
     # Store in session and in server cache
     session["last_optimize"] = response

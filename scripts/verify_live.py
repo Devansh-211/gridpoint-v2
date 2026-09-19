@@ -95,10 +95,38 @@ def run_verification():
     })
     assert r_explain.status_code == 200, f"Explain endpoint failed: {r_explain.text}"
     explain_data = r_explain.json()
-    print(f"[PASS] Per-Page Explainer: page={explain_data['page']}, grounded={explain_data['grounded']}, reply='{explain_data['reply'][:65]}...'")
+    # Test Phase 5: Auto-Sized Warehouse Network (Count as a Decision Variable)
+    auto_payload = {
+        'session_id': 'default',
+        'auto_size': True,
+        'p_max': 6,
+        'warehouse_capacity': 4000.0,
+        'cost_per_km': 1.25,
+        'fixed_cost_per_warehouse': 300.0,
+    }
+    r_auto = requests.post(f'{base}/api/optimize', json=auto_payload)
+    assert r_auto.status_code == 200, f"Auto-size optimize failed: {r_auto.text}"
+    auto_data = r_auto.json()
+    assert auto_data['auto_size'] is True
+    assert 1 <= auto_data['p'] <= 6
+    print(f"[PASS] Auto-Sized CFLP: {auto_data['status']} - Solver selected {auto_data['p']} warehouses (p_max=6)")
+    print(f"       Total System Throughput: {auto_data['total_system_capacity']:,} orders/day vs Demand: {auto_data['total_system_demand']:,} orders/day (Headroom: +{auto_data['capacity_headroom']:,} orders/day, {auto_data['capacity_headroom_pct']}% buffer)")
+    print(f"       Rationale: {auto_data['sizing_rationale']}")
 
-    print("\nALL LIVE SYSTEM & AI AGENT CHECKS PASSED WITH 100% SUCCESS!")
+    # Verify Capacity Required & Capacity Ceiling in warehouse summary
+    first_w = auto_data['warehouses'][0]
+    assert 'capacity_required' in first_w
+    assert 'capacity_ceiling' in first_w
+    print(f"[PASS] Warehouse Manifest Columns: {first_w['name']} -> Required: {first_w['capacity_required']:,} ord/day, Ceiling: {first_w['capacity_ceiling']:,} ord/day, Utilization: {first_w['capacity_utilization_pct']}%")
+
+    # Verify candidate scaling validation (p_max > total candidates rejects gracefully)
+    r_cand_val = requests.post(f'{base}/api/optimize', json={'session_id': 'default', 'auto_size': True, 'p_max': 999})
+    assert r_cand_val.status_code == 400
+    print(f"[PASS] Candidate Scaling Guardrail: p_max=999 rejected with diagnostic message (HTTP 400)")
+
+    print("\nALL LIVE SYSTEM, AUTO-SIZING & AI AGENT CHECKS PASSED WITH 100% SUCCESS!")
 
 if __name__ == '__main__':
     run_verification()
+
 

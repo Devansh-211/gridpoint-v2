@@ -107,3 +107,85 @@ def test_cflp_infeasible_detected():
     assert result.is_optimal is False
     assert "Infeasible" in result.status
     assert len(result.diagnostics) > 0
+
+
+def test_cflp_auto_size_tradeoff_fixed_cost():
+    """Validates that in Auto mode, solver treats count as a decision variable:
+    - High fixed lease cost => solver opens fewer warehouses to minimize total cost.
+    - Low fixed lease cost => solver opens more warehouses to minimize transit cost.
+    """
+    neighborhoods = [
+        Neighborhood(id="N1", name="N1", latitude=13.0, longitude=77.0, daily_orders=100),
+        Neighborhood(id="N2", name="N2", latitude=13.0, longitude=77.5, daily_orders=100),
+        Neighborhood(id="N3", name="N3", latitude=13.0, longitude=78.0, daily_orders=100),
+        Neighborhood(id="N4", name="N4", latitude=13.0, longitude=78.5, daily_orders=100),
+    ]
+    candidates = [
+        WarehouseCandidate(id=n.id, name=f"Site {n.id}", latitude=n.latitude, longitude=n.longitude, capacity=500)
+        for n in neighborhoods
+    ]
+    durations = {
+        c.id: {
+            n.id: abs(c.longitude - n.longitude) * 50.0
+            for n in neighborhoods
+        }
+        for c in candidates
+    }
+
+    # Case A: High fixed cost ($2,000/day) -> fixed lease cost dominates -> open 1 warehouse
+    res_high_fixed = solve_cflp(
+        neighborhoods=neighborhoods,
+        candidates=candidates,
+        p_warehouses=1,
+        duration_matrix_min=durations,
+        auto_size=True,
+        p_max=4,
+        cost_per_km=1.25,
+        fixed_cost_per_warehouse=2000.0,
+    )
+    assert res_high_fixed.is_optimal is True or res_high_fixed.status.startswith("Feasible")
+    assert len(res_high_fixed.open_warehouse_ids) == 1
+
+    # Case B: Low fixed cost ($1/day) with high transit cost -> solver opens more warehouses
+    res_low_fixed = solve_cflp(
+        neighborhoods=neighborhoods,
+        candidates=candidates,
+        p_warehouses=1,
+        duration_matrix_min=durations,
+        auto_size=True,
+        p_max=4,
+        cost_per_km=50.0,
+        fixed_cost_per_warehouse=1.0,
+    )
+    assert res_low_fixed.is_optimal is True or res_low_fixed.status.startswith("Feasible")
+    assert len(res_low_fixed.open_warehouse_ids) >= 2
+
+
+def test_cflp_auto_size_respects_p_max_ceiling():
+    """Validates that auto-sizing strictly respects p_max upper bound."""
+    neighborhoods = [
+        Neighborhood(id=f"N{i}", name=f"N{i}", latitude=13.0 + i*0.1, longitude=77.0, daily_orders=50)
+        for i in range(6)
+    ]
+    candidates = [
+        WarehouseCandidate(id=n.id, name=f"Site {n.id}", latitude=n.latitude, longitude=n.longitude, capacity=500)
+        for n in neighborhoods
+    ]
+    durations = {
+        c.id: {n.id: abs(float(c.id[1:]) - float(n.id[1:])) * 20.0 for n in neighborhoods}
+        for c in candidates
+    }
+
+    res = solve_cflp(
+        neighborhoods=neighborhoods,
+        candidates=candidates,
+        p_warehouses=1,
+        duration_matrix_min=durations,
+        auto_size=True,
+        p_max=2,
+        cost_per_km=10.0,
+        fixed_cost_per_warehouse=5.0,
+    )
+    assert res.is_optimal is True or res.status.startswith("Feasible")
+    assert len(res.open_warehouse_ids) <= 2
+

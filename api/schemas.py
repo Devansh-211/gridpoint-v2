@@ -31,8 +31,10 @@ class UploadResponse(BaseModel):
 # 2. Optimization models
 class OptimizeRequest(BaseModel):
     session_id: Optional[str] = "default"
-    p: int = Field(default=3, ge=1, le=10, description="Exact number of warehouses to open")
-    warehouse_capacity: float = Field(default=4000.0, gt=0, description="Daily throughput capacity per site")
+    p: int = Field(default=3, ge=1, description="Exact number of warehouses to open (in Manual mode)")
+    auto_size: bool = Field(default=False, description="Whether to auto-size warehouse count to minimize total cost (Auto mode)")
+    p_max: Optional[int] = Field(default=None, ge=1, description="Maximum warehouse count to consider in auto-size mode")
+    warehouse_capacity: float = Field(default=4000.0, gt=0, description="Daily throughput capacity ceiling per site")
     radius_max_km: Optional[float] = Field(default=None, gt=0, description="Max service radius in kilometers")
     cost_per_km: float = Field(default=1.25, gt=0, description="Cost per kilometer of delivery travel")
     fixed_cost_per_warehouse: float = Field(default=300.0, ge=0, description="Daily facility lease cost per warehouse")
@@ -50,8 +52,10 @@ class WarehouseSummary(BaseModel):
     name: str
     latitude: float
     longitude: float
-    capacity: float
-    assigned_demand: float
+    capacity: float  # Capacity ceiling (orders/day)
+    assigned_demand: float  # Capacity required (orders/day)
+    capacity_required: Optional[float] = None  # Explicit alias for assigned_demand
+    capacity_ceiling: Optional[float] = None  # Explicit alias for capacity
     capacity_utilization_pct: float
     neighborhoods_count: int
 
@@ -74,11 +78,17 @@ class OptimizeResponse(BaseModel):
     solver_message: str
     is_optimal: bool
     p: int
+    auto_size: bool = False
     total_weighted_distance_km: float
     average_distance_km: float = 0.0
     total_delivery_cost: float
     total_infrastructure_cost: float
     combined_total_cost: float
+    total_system_capacity: float = 0.0
+    total_system_demand: float = 0.0
+    capacity_headroom: float = 0.0
+    capacity_headroom_pct: float = 0.0
+    sizing_rationale: Optional[str] = None
     coverage_percentage: float = 100.0
     fast_delivery_coverage_pct: float = 0.0
     unserved_demand: float = 0.0
@@ -90,6 +100,7 @@ class OptimizeResponse(BaseModel):
     warehouses: List[WarehouseSummary]
     assignments: List[AssignmentItem]
     cvrp_summary: Optional[Dict[str, Any]] = None
+
 
 
 # 3. Baseline & Comparison models

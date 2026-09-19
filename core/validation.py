@@ -119,6 +119,7 @@ def validate_presolve_feasibility(
     p_warehouses: int,
     duration_matrix_min: Dict[str, Dict[str, float]],
     t_max_minutes: Optional[float] = None,
+    auto_size: bool = False,
 ) -> Tuple[bool, List[str]]:
     """Performs strategic feasibility checks prior to invoking the MILP solver.
 
@@ -133,11 +134,13 @@ def validate_presolve_feasibility(
 
     # 1. Check p bounds
     if p_warehouses < 1:
-        diagnostics.append(f"Warehouse count p must be at least 1 (requested p={p_warehouses}).")
+        count_label = "Maximum warehouse count p_max" if auto_size else "Warehouse count p"
+        diagnostics.append(f"{count_label} must be at least 1 (requested {p_warehouses}).")
     elif p_warehouses > n_candidates:
+        count_label = "maximum warehouse count p_max" if auto_size else "warehouse count p"
         diagnostics.append(
-            f"Requested warehouse count p={p_warehouses} exceeds total candidate sites ({n_candidates}). "
-            f"You cannot open more warehouses than available candidate locations."
+            f"Requested {count_label}={p_warehouses} exceeds total candidate sites ({n_candidates}). "
+            f"You cannot consider or open more warehouses than available candidate locations."
         )
 
     # 2. Check total capacity
@@ -145,12 +148,21 @@ def validate_presolve_feasibility(
     max_possible_capacity = sum(sorted_caps[:p_warehouses]) if p_warehouses <= n_candidates else sum(sorted_caps)
 
     if max_possible_capacity < total_demand:
-        diagnostics.append(
-            f"Capacity shortfall: Total network demand is {total_demand:,.0f} orders, but the maximum possible capacity "
-            f"from opening {p_warehouses} warehouse(s) is only {max_possible_capacity:,.0f} orders "
-            f"(shortfall of {total_demand - max_possible_capacity:,.0f} orders). "
-            f"Increase warehouse count p or increase warehouse capacity."
-        )
+        if auto_size:
+            diagnostics.append(
+                f"Capacity shortfall: Total network demand is {total_demand:,.0f} orders, but even opening the maximum "
+                f"allowed {p_warehouses} warehouse(s) provides only {max_possible_capacity:,.0f} orders capacity "
+                f"(shortfall of {total_demand - max_possible_capacity:,.0f} orders). "
+                f"Increase p_max ceiling or increase per-warehouse capacity."
+            )
+        else:
+            diagnostics.append(
+                f"Capacity shortfall: Total network demand is {total_demand:,.0f} orders, but the maximum possible capacity "
+                f"from opening {p_warehouses} warehouse(s) is only {max_possible_capacity:,.0f} orders "
+                f"(shortfall of {total_demand - max_possible_capacity:,.0f} orders). "
+                f"Increase warehouse count p or increase warehouse capacity."
+            )
+
 
     # 3. Check reachability within T_max
     if t_max_minutes is not None and t_max_minutes > 0:
