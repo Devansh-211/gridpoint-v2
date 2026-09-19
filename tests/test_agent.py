@@ -329,3 +329,60 @@ def test_agent_generate_synthetic_data_with_mocked_claude():
         assert data["dataset_type"] == "ai_synthetic"
         assert len(data["preview"]) == 10
         assert data["total_demand"] == sum(z["daily_orders"] for z in mock_zones)
+
+
+def test_agent_extract_with_mocked_gemini():
+    """Verify that Google Gemini SDK provider path extracts parameters correctly."""
+    mock_gemini_json = (
+        '{"status": "confirm", "reply": "Configured 3 facilities with 4,000 throughput.", '
+        '"warehouse_count": 3, "warehouse_capacity": 4000.0, "max_service_radius_km": 25.0, '
+        '"priority_preset": "cost", "include_cvrp": false, "missing_required": [], "ready_to_optimize": true}'
+    )
+    mock_response = MagicMock(text=mock_gemini_json)
+
+    with patch("api.agent.get_anthropic_client", return_value=None), \
+         patch("api.agent.get_gemini_client") as mock_get_gemini:
+        mock_gemini = MagicMock()
+        mock_gemini.models.generate_content.return_value = mock_response
+        mock_get_gemini.return_value = mock_gemini
+
+        res = client.post("/api/agent/extract", json={
+            "message": "Configure 3 warehouses with 4000 capacity and 25km radius",
+            "history": [],
+            "known_params": {}
+        })
+
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "confirm"
+        assert data["extracted_params"]["warehouse_count"] == 3
+        assert data["extracted_params"]["warehouse_capacity"] == 4000.0
+        assert data["ready_to_optimize"] is True
+
+
+def test_agent_explain_with_mocked_gemini():
+    """Verify that Google Gemini SDK provider path generates grounded explanations."""
+    mock_explain_json = (
+        '{"reply": "The 3 warehouses optimize demand-weighted geographic distance.", '
+        '"grounded": true, "grounded_facts": ["Delivery cost: $1,317.59 [Estimate]"], "suggested_followups": ["Show utilization"]}'
+    )
+    mock_response = MagicMock(text=mock_explain_json)
+
+    with patch("api.agent.get_anthropic_client", return_value=None), \
+         patch("api.agent.get_gemini_client") as mock_get_gemini:
+        mock_gemini = MagicMock()
+        mock_gemini.models.generate_content.return_value = mock_response
+        mock_get_gemini.return_value = mock_gemini
+
+        res = client.post("/api/agent/explain", json={
+            "page": "viewResults",
+            "message": "Why were these sites chosen?",
+            "page_context": {"total_delivery_cost": 1317.59, "warehouses": []},
+            "history": []
+        })
+
+        assert res.status_code == 200
+        data = res.json()
+        assert data["grounded"] is True
+        assert "optimize demand-weighted" in data["reply"]
+

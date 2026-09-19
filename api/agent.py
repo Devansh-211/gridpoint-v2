@@ -1,5 +1,5 @@
 """Conversational Optimization Agent logic for GRIDPOINT.
-Wires AI endpoints to a real LLM provider (Anthropic Claude API via official anthropic SDK).
+Supports Anthropic Claude and Google Gemini LLMs via official SDKs (anthropic and google-genai).
 Strictly adheres to Hackathon Honesty Rules, B2B Operations rigor, and Structured Grounding.
 """
 
@@ -15,6 +15,7 @@ from core.validation import validate_neighborhood_dataframe
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 
 def get_anthropic_client() -> Optional[Anthropic]:
@@ -22,7 +23,38 @@ def get_anthropic_client() -> Optional[Anthropic]:
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not api_key or api_key.startswith("your_") or api_key == "placeholder":
         return None
-    return Anthropic(api_key=api_key)
+    try:
+        return Anthropic(api_key=api_key)
+    except Exception as e:
+        logger.error("Failed to initialize Anthropic client: %s", e)
+        return None
+
+
+def get_gemini_client() -> Optional[Any]:
+    """Returns an authenticated Google GenAI client if GEMINI_API_KEY is configured in the environment."""
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
+    gemini_key = gemini_key.strip()
+    if not gemini_key or gemini_key.startswith("your_") or gemini_key == "placeholder":
+        return None
+    try:
+        from google import genai
+        return genai.Client(api_key=gemini_key)
+    except Exception as e:
+        logger.error("Failed to initialize Google GenAI client: %s", e)
+        return None
+
+
+def get_llm_provider() -> Tuple[Optional[str], Optional[Any]]:
+    """Returns active LLM provider ('anthropic' or 'gemini') and client if configured in environment."""
+    client_a = get_anthropic_client()
+    if client_a:
+        return "anthropic", client_a
+
+    client_g = get_gemini_client()
+    if client_g:
+        return "gemini", client_g
+
+    return None, None
 
 
 # ============================================================================
@@ -102,17 +134,17 @@ CFLP_EXTRACT_TOOL = {
 
 
 def process_agent_dialog(req: AgentExtractRequest) -> AgentExtractResponse:
-    """Processes user message and dialogue history using a real Claude model call."""
-    client = get_anthropic_client()
-    if not client:
+    """Processes user message and dialogue history using Anthropic Claude or Google Gemini."""
+    provider, client = get_llm_provider()
+    if not provider or not client:
         return AgentExtractResponse(
             status="error",
-            reply="AI features unavailable — no API key configured. Please add ANTHROPIC_API_KEY to your .env file to enable the conversational optimization assistant.",
+            reply="AI features unavailable — no API key configured. Please add ANTHROPIC_API_KEY or GEMINI_API_KEY to your .env file to enable the conversational optimization assistant.",
             extracted_params=ExtractedParams(),
             missing_required=["api_key"],
             ready_to_optimize=False,
             defaults_applied=[],
-            warnings=["No ANTHROPIC_API_KEY found in environment or .env file."],
+            warnings=["No ANTHROPIC_API_KEY or GEMINI_API_KEY found in environment or .env file."],
             suggested_prompts=[],
         )
 
@@ -132,39 +164,64 @@ def process_agent_dialog(req: AgentExtractRequest) -> AgentExtractResponse:
         "9. vehicle_fixed_cost: Float ($/vehicle, default 150.0).\n\n"
         "Workflow:\n"
         "- If required parameters ('warehouse_count' and 'warehouse_capacity') are not yet specified, set status='clarify', ready_to_optimize=false, and ask exactly one concise question.\n"
-        "- When all required parameters are resolved, set status='confirm', ready_to_optimize=true, and summarize the configuration.\n"
-        "- Always call the `configure_cflp_network` tool to return your structured response."
+        "- When all required parameters are resolved, set status='confirm', ready_to_optimize=true, and summarize the configuration."
     )
 
-    messages = []
-    if req.history:
-        for m in req.history[-8:]:
-            messages.append({"role": m.role if m.role in ["user", "assistant"] else "user", "content": m.content})
-
-    user_prompt = f"Known parameters so far: {json.dumps(req.known_params or {})}\nUser instruction: {req.message}"
-    messages.append({"role": "user", "content": user_prompt})
-
-    try:
-        response = client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=1024,
-            system=system_prompt,
-            messages=messages,
-            tools=[CFLP_EXTRACT_TOOL],
-            tool_choice={"type": "tool", "name": "configure_cflp_network"}
-        )
-    except Exception as e:
-        logger.error("Anthropic API call failed in agent extract: %s", e)
-        raise RuntimeError(f"Anthropic API call failed: {str(e)}")
-
     tool_input = None
-    for content in response.content:
-        if content.type == "tool_use" and content.name == "configure_cflp_network":
-            tool_input = content.input
-            break
+
+    if provider == "anthropic":
+        messages = []
+        if req.history:
+            for m in req.history[-8:]:
+                messages.append({"role": m.role if m.role in ["user", "assistant"] else "user", "content": m.content})
+        user_prompt = f"Known parameters so far: {json.dumps(req.known_params or {})}\nUser instruction: {req.message}"
+        messages.append({"role": "user", "content": user_prompt})
+
+        try:
+            response = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=1024,
+                system=system_prompt,
+                messages=messages,
+                tools=[CFLP_EXTRACT_TOOL],
+                tool_choice={"type": "tool", "name": "configure_cflp_network"}
+            )
+            for content in response.content:
+                if content.type == "tool_use" and content.name == "configure_cflp_network":
+                    tool_input = content.input
+                    break
+        except Exception as e:
+            logger.error("Anthropic API call failed in agent extract: %s", e)
+            raise RuntimeError(f"Anthropic API call failed: {str(e)}")
+
+    elif provider == "gemini":
+        try:
+            from google.genai import types
+            prompt = (
+                f"{system_prompt}\n\n"
+                f"Known parameters: {json.dumps(req.known_params or {})}\n"
+                f"History: {[m.model_dump() for m in req.history[-6:]]}\n"
+                f"User message: {req.message}\n\n"
+                "Return a structured JSON object with keys: "
+                "status ('clarify'|'confirm'|'error'), reply (string), warehouse_count (int|null), warehouse_capacity (float|null), "
+                "max_service_radius_km (float|null), cost_per_km (float), fixed_cost_per_warehouse (float), priority_preset ('cost'|'speed'|'sustainability'), "
+                "include_cvrp (bool), vehicle_capacity (int), vehicle_fixed_cost (float), missing_required (list of strings), ready_to_optimize (bool), suggested_prompts (list of strings)."
+            )
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,
+                )
+            )
+            tool_input = json.loads(response.text)
+        except Exception as e:
+            logger.error("Google Gemini API call failed in agent extract: %s", e)
+            raise RuntimeError(f"Google Gemini API call failed: {str(e)}")
 
     if not tool_input:
-        raise RuntimeError("Model did not return structured tool call for parameter extraction.")
+        raise RuntimeError("Model did not return structured parameters.")
 
     extracted = ExtractedParams(
         warehouse_count=tool_input.get("warehouse_count"),
@@ -265,12 +322,12 @@ def generate_synthetic_demand_dataset(
     pattern: str = "clustered",
     region_name: str = "Bengaluru",
 ) -> Tuple[bool, List[str], Optional[Any]]:
-    """Generates a realistic, non-uniform, clustered synthetic demand dataset using Claude LLM.
+    """Generates a realistic, non-uniform, clustered synthetic demand dataset using Claude or Gemini.
     Strictly validates output through core.validation.validate_neighborhood_dataframe.
     """
-    client = get_anthropic_client()
-    if not client:
-        return False, ["AI features unavailable — no ANTHROPIC_API_KEY configured in .env."], None
+    provider, client = get_llm_provider()
+    if not provider or not client:
+        return False, ["AI features unavailable — no ANTHROPIC_API_KEY or GEMINI_API_KEY configured in .env."], None
 
     clamped_count = max(10, min(int(zone_count), 150))
 
@@ -287,31 +344,52 @@ def generate_synthetic_demand_dataset(
         "- latitude: Real geographic latitude inside the city boundary (e.g. 12.8-13.1 for Bengaluru, 18.9-19.3 for Mumbai, 28.4-28.8 for Delhi NCR).\n"
         "- longitude: Real geographic longitude inside the city boundary (e.g. 77.5-77.8 for Bengaluru, 72.8-73.0 for Mumbai, 77.0-77.4 for Delhi NCR).\n"
         "- daily_orders: Float demand between 45.0 and 950.0 orders/day (log-normal / Pareto skewed).\n"
-        "- capacity: Approximately 25-35% of zones should have warehouse capacity (e.g. 4000.0, 5000.0, 6000.0), others must be null.\n\n"
-        "Output using the `output_synthetic_demand_dataset` tool."
+        "- capacity: Approximately 25-35% of zones should have warehouse capacity (e.g. 4000.0, 5000.0, 6000.0), others must be null."
     )
 
-    try:
-        response = client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=4096,
-            system=system_prompt,
-            messages=[{
-                "role": "user",
-                "content": f"Generate a {pattern} delivery dataset for {region_name} with {clamped_count} zones."
-            }],
-            tools=[SYNTHETIC_DATA_TOOL],
-            tool_choice={"type": "tool", "name": "output_synthetic_demand_dataset"}
-        )
-    except Exception as e:
-        logger.error("Anthropic API call failed in synthetic data generation: %s", e)
-        return False, [f"Anthropic API call failed: {str(e)}"], None
-
     tool_input = None
-    for content in response.content:
-        if content.type == "tool_use" and content.name == "output_synthetic_demand_dataset":
-            tool_input = content.input
-            break
+
+    if provider == "anthropic":
+        try:
+            response = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=4096,
+                system=system_prompt,
+                messages=[{
+                    "role": "user",
+                    "content": f"Generate a {pattern} delivery dataset for {region_name} with {clamped_count} zones."
+                }],
+                tools=[SYNTHETIC_DATA_TOOL],
+                tool_choice={"type": "tool", "name": "output_synthetic_demand_dataset"}
+            )
+            for content in response.content:
+                if content.type == "tool_use" and content.name == "output_synthetic_demand_dataset":
+                    tool_input = content.input
+                    break
+        except Exception as e:
+            logger.error("Anthropic API call failed in synthetic data generation: %s", e)
+            return False, [f"Anthropic API call failed: {str(e)}"], None
+
+    elif provider == "gemini":
+        try:
+            from google.genai import types
+            prompt = (
+                f"{system_prompt}\n\n"
+                f"Generate {clamped_count} delivery zones for {region_name}.\n"
+                "Return a JSON object with: { region_name: string, zones: [ { neighborhood_id, name, latitude, longitude, daily_orders, capacity } ] }"
+            )
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2,
+                )
+            )
+            tool_input = json.loads(response.text)
+        except Exception as e:
+            logger.error("Google Gemini API call failed in synthetic data generation: %s", e)
+            return False, [f"Google Gemini API call failed: {str(e)}"], None
 
     if not tool_input or "zones" not in tool_input:
         return False, ["Model failed to generate structured synthetic zones."], None
@@ -320,10 +398,8 @@ def generate_synthetic_demand_dataset(
     if not zones or len(zones) == 0:
         return False, ["Model returned an empty list of zones."], None
 
-    # Construct DataFrame
     df = pd.DataFrame(zones)
 
-    # Ensure required columns exist
     for col in ["neighborhood_id", "name", "latitude", "longitude", "daily_orders"]:
         if col not in df.columns:
             return False, [f"Missing required column in generated dataset: {col}"], None
@@ -331,7 +407,6 @@ def generate_synthetic_demand_dataset(
     if "capacity" not in df.columns:
         df["capacity"] = None
 
-    # Pass through the EXACT same validator as CSV uploads
     is_valid, errors, cleaned_df = validate_neighborhood_dataframe(df)
     return is_valid, errors, cleaned_df
 
@@ -376,11 +451,11 @@ def process_agent_explanation(
     page_context: Dict[str, Any],
     history: Optional[List[AgentMessage]] = None,
 ) -> Dict[str, Any]:
-    """Generates grounded explanations strictly based on real computed page context using Claude."""
-    client = get_anthropic_client()
-    if not client:
+    """Generates grounded explanations strictly based on real computed page context using Claude or Gemini."""
+    provider, client = get_llm_provider()
+    if not provider or not client:
         return {
-            "reply": "AI features unavailable — no API key configured. Please add ANTHROPIC_API_KEY to your .env file to enable grounded AI explanations.",
+            "reply": "AI features unavailable — no API key configured. Please add ANTHROPIC_API_KEY or GEMINI_API_KEY to your .env file to enable grounded AI explanations.",
             "page": page,
             "grounded": False,
             "grounded_facts": [],
@@ -406,43 +481,62 @@ def process_agent_explanation(
         "CRITICAL GROUNDING RULES:\n"
         "1. You must answer ONLY from the provided `page_context` object. Never invent, extrapolate, or hallucinate metrics, costs, savings, or numbers not present in `page_context`.\n"
         "2. If the user's question cannot be answered using the provided `page_context`, or asks about uncomputed hypothetical what-ifs (e.g. surges, outages, custom parameter changes), YOU MUST HONESTLY STATE that the current screen's computed data does not answer that question, and direct the user to the appropriate screen (e.g. Scenario Lab for demand surges/shock tests, Disruption & Resilience for facility outage simulations, Analytics & Trade-off for the p=1..5 curve, or Network Configuration).\n"
-        "3. Label financial and emissions figures with [Estimate] where appropriate.\n"
-        "4. Always invoke the `output_grounded_explanation` tool."
+        "3. Label financial and emissions figures with [Estimate] where appropriate."
     )
-
-    messages = []
-    if history:
-        for m in history[-6:]:
-            messages.append({"role": m.role if m.role in ["user", "assistant"] else "user", "content": m.content})
-
-    user_prompt = (
-        f"Active Screen: {page}\n"
-        f"Computed Screen Context (JSON):\n{json.dumps(page_context, indent=2)}\n\n"
-        f"User Question: {message}"
-    )
-    messages.append({"role": "user", "content": user_prompt})
-
-    try:
-        response = client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=1024,
-            system=system_prompt,
-            messages=messages,
-            tools=[EXPLAIN_TOOL],
-            tool_choice={"type": "tool", "name": "output_grounded_explanation"}
-        )
-    except Exception as e:
-        logger.error("Anthropic API call failed in agent explain: %s", e)
-        raise RuntimeError(f"Anthropic API call failed: {str(e)}")
 
     tool_input = None
-    for content in response.content:
-        if content.type == "tool_use" and content.name == "output_grounded_explanation":
-            tool_input = content.input
-            break
+
+    if provider == "anthropic":
+        messages = []
+        if history:
+            for m in history[-6:]:
+                messages.append({"role": m.role if m.role in ["user", "assistant"] else "user", "content": m.content})
+        user_prompt = f"Active Screen: {page}\nComputed Screen Context (JSON):\n{json.dumps(page_context, indent=2)}\n\nUser Question: {message}"
+        messages.append({"role": "user", "content": user_prompt})
+
+        try:
+            response = client.messages.create(
+                model=ANTHROPIC_MODEL,
+                max_tokens=1024,
+                system=system_prompt,
+                messages=messages,
+                tools=[EXPLAIN_TOOL],
+                tool_choice={"type": "tool", "name": "output_grounded_explanation"}
+            )
+            for content in response.content:
+                if content.type == "tool_use" and content.name == "output_grounded_explanation":
+                    tool_input = content.input
+                    break
+        except Exception as e:
+            logger.error("Anthropic API call failed in agent explain: %s", e)
+            raise RuntimeError(f"Anthropic API call failed: {str(e)}")
+
+    elif provider == "gemini":
+        try:
+            from google.genai import types
+            prompt = (
+                f"{system_prompt}\n\n"
+                f"Screen: {page}\n"
+                f"Page Context: {json.dumps(page_context)}\n"
+                f"Question: {message}\n\n"
+                "Return a JSON object with keys: "
+                "reply (markdown string), grounded (boolean), grounded_facts (list of strings), suggested_followups (list of strings)."
+            )
+            response = client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,
+                )
+            )
+            tool_input = json.loads(response.text)
+        except Exception as e:
+            logger.error("Google Gemini API call failed in agent explain: %s", e)
+            raise RuntimeError(f"Google Gemini API call failed: {str(e)}")
 
     if not tool_input:
-        raise RuntimeError("Model did not return structured explanation tool call.")
+        raise RuntimeError("Model did not return structured explanation.")
 
     return {
         "reply": tool_input.get("reply", ""),
