@@ -63,24 +63,199 @@ const VIEW_METADATA = {
 };
 
 // ============================================================================
-// CONVERSATIONAL LOGISTICS AGENT STATE & UTILITIES (PHASE 2)
+// CONVERSATIONAL LOGISTICS AI AGENT & EXPLAIN SYSTEM (PHASES 2, 3 & 4)
 // ============================================================================
 
 const agentState = {
-  history: [],
+  mode: "setup", // "setup", "explain", "synthetic"
+  historySetup: [],
+  historyExplain: [],
   knownParams: {
     warehouse_count: 3,
     warehouse_capacity: 4000,
     max_service_radius_km: 25.0,
-    cost_per_km: 1.5,
-    fixed_cost_per_warehouse: 50000.0,
+    cost_per_km: 1.25,
+    fixed_cost_per_warehouse: 300.0,
     priority_preset: "cost",
     include_cvrp: false,
-    vehicle_capacity: 150,
-    vehicle_fixed_cost: 500.0,
+    vehicle_capacity: 250,
+    vehicle_fixed_cost: 150.0,
   },
   isProcessing: false,
 };
+
+const EXPLAIN_PROMPTS_BY_VIEW = {
+  viewResults: [
+    "Why were these specific warehouse locations selected?",
+    "Show facility throughput capacity and utilization breakdown",
+    "Explain savings compared to the single-warehouse baseline",
+    "How is demand-weighted distance calculated?",
+  ],
+  viewScenarios: [
+    "How does the network respond to a +50% festival demand surge?",
+    "What is the simulated cost shift during peak volume?",
+    "Are any warehouse throughput capacities exceeded in this scenario?",
+  ],
+  viewDisruption: [
+    "What happens if our primary central warehouse suffers an outage?",
+    "How is displaced demand re-routed during facility failure?",
+    "What is the emergency reassignment cost impact?",
+  ],
+  viewFleet: [
+    "How are multi-stop CVRP vehicle routes constructed?",
+    "Explain vehicle payload utilization across the fleet",
+    "What is the total estimated fleet travel distance?",
+  ],
+  viewAnalytics: [
+    "Where is the point of diminishing returns on the trade-off curve?",
+    "Why does marginal savings decrease as warehouse count p increases?",
+    "Explain the fleet CO2 emissions calculation formula",
+  ],
+  viewConfig: [
+    "How does changing p from 3 to 4 impact delivery cost?",
+    "What does maximum service radius constrain in the solver?",
+    "What are the default cost and lease assumptions?",
+  ],
+  viewData: [
+    "What validation rules are enforced on uploaded CSV datasets?",
+    "How are candidate facility locations identified from delivery zones?",
+    "What is the total daily demand volume across active zones?",
+  ],
+};
+
+function updateSyntheticDatasetBadge(isSynthetic) {
+  appState.isSyntheticAi = !!isSynthetic;
+  appState.datasetType = isSynthetic ? "ai_synthetic" : "demo";
+  const badge = document.getElementById("headerSyntheticBadge");
+  if (badge) {
+    badge.style.display = isSynthetic ? "inline-flex" : "none";
+  }
+}
+
+function gatherPageContext(viewId) {
+  const ctx = {
+    view: viewId,
+    session_id: appState.sessionId,
+    is_synthetic_ai: appState.isSyntheticAi,
+    dataset_type: appState.datasetType,
+  };
+
+  if (viewId === "viewResults" && appState.lastOptimize) {
+    const opt = appState.lastOptimize;
+    ctx.status = opt.status;
+    ctx.warehouse_count = opt.warehouse_count || (opt.warehouses ? opt.warehouses.length : 3);
+    ctx.total_delivery_cost = opt.total_delivery_cost;
+    ctx.estimated_monthly_savings = opt.estimated_monthly_savings;
+    ctx.avg_distance_km = opt.avg_delivery_distance_km;
+    ctx.max_distance_km = opt.max_delivery_distance_km;
+    ctx.unassigned_count = opt.unassigned_neighborhoods ? opt.unassigned_neighborhoods.length : 0;
+    ctx.priority_preset = opt.priority_preset || appState.priorityPreset;
+    ctx.warehouses = (opt.warehouses || []).map(w => ({
+      warehouse_id: w.warehouse_id,
+      name: w.name,
+      assigned_demand: w.assigned_demand,
+      capacity: w.capacity,
+      capacity_utilization_pct: w.capacity_utilization_pct,
+      neighborhoods_count: w.neighborhoods_count,
+    }));
+    if (appState.lastCompare) {
+      ctx.cost_pct_change = appState.lastCompare.cost_pct_change;
+      ctx.co2_pct_change = appState.lastCompare.co2_pct_change;
+    }
+  } else if (viewId === "viewScenarios" && appState.lastScenario) {
+    const sc = appState.lastScenario;
+    ctx.demand_multiplier = sc.demand_multiplier;
+    ctx.cost_pct_change = sc.cost_pct_change;
+    ctx.scenario_warehouses = sc.scenario_warehouses;
+    ctx.unserved_demand = sc.unserved_demand;
+  } else if (viewId === "viewDisruption" && appState.lastScenario) {
+    const sc = appState.lastScenario;
+    ctx.failed_warehouse_id = sc.failed_warehouse;
+    ctx.cost_pct_change = sc.cost_pct_change;
+    ctx.scenario_warehouses = sc.scenario_warehouses;
+  } else if (viewId === "viewFleet" && appState.lastOptimize?.cvrp_routes) {
+    ctx.routes_count = appState.lastOptimize.cvrp_routes.length;
+    ctx.total_fleet_distance_km = appState.lastOptimize.total_cvrp_distance_km;
+  } else if (viewId === "viewAnalytics" && appState.lastTradeoff) {
+    ctx.tradeoff_points = appState.lastTradeoff.points;
+  } else if (viewId === "viewData") {
+    ctx.neighborhood_count = appState.neighborhoods ? appState.neighborhoods.length : 0;
+    ctx.total_demand = appState.neighborhoods ? appState.neighborhoods.reduce((sum, n) => sum + (n.daily_orders || 0), 0) : 0;
+  } else if (viewId === "viewConfig") {
+    ctx.warehouse_count = parseInt(document.getElementById("inputConfigP")?.value) || 3;
+    ctx.warehouse_capacity = parseInt(document.getElementById("inputConfigCap")?.value) || 4000;
+    ctx.max_service_radius_km = parseFloat(document.getElementById("inputConfigRadius")?.value) || 25.0;
+    ctx.priority_preset = appState.priorityPreset;
+  }
+
+  return ctx;
+}
+
+function renderExplainQuickQuestions(viewId) {
+  const container = document.getElementById("agentExplainQuickPrompts");
+  if (!container) return;
+  const questions = EXPLAIN_PROMPTS_BY_VIEW[viewId] || EXPLAIN_PROMPTS_BY_VIEW["viewResults"];
+  container.innerHTML = '<div class="gp-quick-prompts-label">Screen Questions:</div>';
+  questions.forEach(q => {
+    const chip = document.createElement("button");
+    chip.className = "gp-quick-chip";
+    chip.textContent = `• ${q}`;
+    chip.addEventListener("click", () => sendAgentExplainMessage(q));
+    container.appendChild(chip);
+  });
+}
+
+function setAgentMode(mode) {
+  agentState.mode = mode;
+  const btnSetup = document.getElementById("btnModeSetup");
+  const btnExplain = document.getElementById("btnModeExplain");
+  const containerSetup = document.getElementById("agentSetupContainer");
+  const containerSynthetic = document.getElementById("agentSyntheticContainer");
+  const containerExplain = document.getElementById("agentExplainContainer");
+  const bannerExplain = document.getElementById("agentExplainBanner");
+  const bannerText = document.getElementById("agentExplainBannerText");
+  const inputEl = document.getElementById("agentInput");
+  const titleEl = document.getElementById("agentDrawerTitle");
+  const subEl = document.getElementById("agentDrawerSubtitle");
+
+  if (mode === "setup") {
+    btnSetup?.classList.add("active");
+    btnExplain?.classList.remove("active");
+    if (containerSetup) containerSetup.style.display = "flex";
+    if (containerSynthetic) containerSynthetic.style.display = "none";
+    if (containerExplain) containerExplain.style.display = "none";
+    if (bannerExplain) bannerExplain.style.display = "none";
+    if (inputEl) inputEl.placeholder = "Describe network requirements (e.g. 3 sites, 4000 cap)...";
+    if (titleEl) titleEl.textContent = "Logistics Assistant";
+    if (subEl) subEl.textContent = "Plain-Language Optimization Setup";
+  } else if (mode === "synthetic") {
+    btnSetup?.classList.add("active");
+    btnExplain?.classList.remove("active");
+    if (containerSetup) containerSetup.style.display = "none";
+    if (containerSynthetic) containerSynthetic.style.display = "flex";
+    if (containerExplain) containerExplain.style.display = "none";
+    if (bannerExplain) bannerExplain.style.display = "none";
+    if (inputEl) inputEl.placeholder = "Describe region or zone preferences...";
+    if (titleEl) titleEl.textContent = "Synthetic Data Generator";
+    if (subEl) subEl.textContent = "Consent-Gated Non-Uniform AI Data";
+  } else if (mode === "explain") {
+    btnSetup?.classList.remove("active");
+    btnExplain?.classList.add("active");
+    if (containerSetup) containerSetup.style.display = "none";
+    if (containerSynthetic) containerSynthetic.style.display = "none";
+    if (containerExplain) containerExplain.style.display = "flex";
+    if (bannerExplain) {
+      bannerExplain.style.display = "flex";
+      const meta = VIEW_METADATA[appState.currentView] || { title: "Workspace" };
+      if (bannerText) bannerText.textContent = `Grounded in active ${meta.title} computed metrics`;
+    }
+    if (inputEl) inputEl.placeholder = `Ask AI about ${VIEW_METADATA[appState.currentView]?.title || "this screen"}...`;
+    if (titleEl) titleEl.textContent = "Logistics AI Explainer";
+    if (subEl) subEl.textContent = "Grounded Real-Data Explanations";
+
+    renderExplainQuickQuestions(appState.currentView);
+  }
+}
 
 function syncUiToAgentParams() {
   const pVal = parseInt(document.getElementById("inputConfigP")?.value) || 3;
@@ -139,11 +314,22 @@ function applyAgentParamsToUi(params) {
   agentState.knownParams = { ...agentState.knownParams, ...params };
 }
 
-function toggleAgentDrawer(open) {
+function toggleAgentDrawer(open, optionalMode = null) {
   const drawer = document.getElementById("agentDrawer");
   const backdrop = document.getElementById("agentDrawerBackdrop");
   if (!drawer || !backdrop) return;
+
   if (open) {
+    if (optionalMode) {
+      setAgentMode(optionalMode);
+    } else {
+      // Auto-default based on page
+      if (["viewResults", "viewScenarios", "viewDisruption", "viewFleet", "viewAnalytics"].includes(appState.currentView)) {
+        setAgentMode("explain");
+      } else {
+        setAgentMode("setup");
+      }
+    }
     syncUiToAgentParams();
     drawer.classList.add("active");
     backdrop.classList.add("active");
@@ -157,26 +343,28 @@ function toggleAgentDrawer(open) {
 function updateAgentFabVisibility(viewId) {
   const fab = document.getElementById("btnOpenAgentDrawer");
   if (!fab) return;
-  if (viewId === "viewDashboard" || viewId === "viewConfig") {
+  // Accessible across all actionable screens
+  if (viewId !== "viewLanding" && viewId !== "viewMethodology") {
     fab.classList.add("visible");
   } else {
     fab.classList.remove("visible");
   }
 }
 
-function appendAgentMessage(text, role = "agent") {
-  const body = document.getElementById("agentChatBody");
+function appendAgentMessage(text, role = "agent", targetContainerId = "agentSetupContainer") {
+  const body = document.getElementById(targetContainerId);
   if (!body) return;
   const bubble = document.createElement("div");
   bubble.className = `gp-bubble ${role === "user" ? "gp-bubble-user" : "gp-bubble-agent"}`;
   bubble.textContent = text;
   body.appendChild(bubble);
-  body.scrollTop = body.scrollHeight;
+  const chatBody = document.getElementById("agentChatBody");
+  if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
 }
 
 function showThinkingPulse() {
-  const body = document.getElementById("agentChatBody");
-  if (!body) return;
+  const chatBody = document.getElementById("agentChatBody");
+  if (!chatBody) return;
   removeThinkingPulse();
   const pulse = document.createElement("div");
   pulse.id = "agentThinkingPulse";
@@ -186,8 +374,8 @@ function showThinkingPulse() {
     <div class="gp-thinking-dot"></div>
     <div class="gp-thinking-dot"></div>
   `;
-  body.appendChild(pulse);
-  body.scrollTop = body.scrollHeight;
+  chatBody.appendChild(pulse);
+  chatBody.scrollTop = chatBody.scrollHeight;
 }
 
 function removeThinkingPulse() {
@@ -196,7 +384,7 @@ function removeThinkingPulse() {
 }
 
 function renderSuggestedPrompts(prompts) {
-  const body = document.getElementById("agentChatBody");
+  const body = document.getElementById("agentSetupContainer");
   if (!body || !prompts || prompts.length === 0) return;
   const container = document.createElement("div");
   container.className = "gp-quick-prompts";
@@ -209,11 +397,12 @@ function renderSuggestedPrompts(prompts) {
     container.appendChild(chip);
   });
   body.appendChild(container);
-  body.scrollTop = body.scrollHeight;
+  const chatBody = document.getElementById("agentChatBody");
+  if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
 }
 
 function renderConfirmationCard(data) {
-  const body = document.getElementById("agentChatBody");
+  const body = document.getElementById("agentSetupContainer");
   if (!body || !data.confirmation_card) return;
   const cardData = data.confirmation_card;
   const p = cardData.params || {};
@@ -268,7 +457,8 @@ function renderConfirmationCard(data) {
   `;
 
   body.appendChild(card);
-  body.scrollTop = body.scrollHeight;
+  const chatBody = document.getElementById("agentChatBody");
+  if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
 
   const btnRun = card.querySelector("#btnConfirmRunOpt");
   const btnKeep = card.querySelector("#btnConfirmKeepTalking");
@@ -304,8 +494,8 @@ async function sendAgentMessage(userText) {
   const inputEl = document.getElementById("agentInput");
   if (inputEl) inputEl.value = "";
 
-  appendAgentMessage(text, "user");
-  agentState.history.push({ role: "user", content: text });
+  appendAgentMessage(text, "user", "agentSetupContainer");
+  agentState.historySetup.push({ role: "user", content: text });
 
   showThinkingPulse();
   agentState.isProcessing = true;
@@ -317,7 +507,7 @@ async function sendAgentMessage(userText) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         message: text,
-        history: agentState.history.slice(-10),
+        history: agentState.historySetup.slice(-10),
         known_params: agentState.knownParams,
       }),
     });
@@ -327,12 +517,12 @@ async function sendAgentMessage(userText) {
     agentState.isProcessing = false;
 
     if (!res.ok) {
-      appendAgentMessage(`Error processing request: ${data.detail || "Server error"}`, "agent");
+      appendAgentMessage(`Error processing request: ${data.detail || "Server error"}`, "agent", "agentSetupContainer");
       return;
     }
 
-    agentState.history.push({ role: "assistant", content: data.reply });
-    appendAgentMessage(data.reply, "agent");
+    agentState.historySetup.push({ role: "assistant", content: data.reply });
+    appendAgentMessage(data.reply, "agent", "agentSetupContainer");
 
     if (data.extracted_params) {
       agentState.knownParams = { ...agentState.knownParams, ...data.extracted_params };
@@ -348,7 +538,87 @@ async function sendAgentMessage(userText) {
   } catch (err) {
     removeThinkingPulse();
     agentState.isProcessing = false;
-    appendAgentMessage(`Connection error: ${err.message}`, "agent");
+    appendAgentMessage(`Connection error: ${err.message}`, "agent", "agentSetupContainer");
+  }
+}
+
+async function sendAgentExplainMessage(userText) {
+  if (!userText || !userText.trim() || agentState.isProcessing) return;
+  const text = userText.trim();
+
+  const inputEl = document.getElementById("agentInput");
+  if (inputEl) inputEl.value = "";
+
+  const body = document.getElementById("agentExplainContainer");
+  if (!body) return;
+
+  const userBubble = document.createElement("div");
+  userBubble.className = "gp-bubble gp-bubble-user";
+  userBubble.textContent = text;
+  body.appendChild(userBubble);
+
+  agentState.historyExplain.push({ role: "user", content: text });
+  showThinkingPulse();
+  agentState.isProcessing = true;
+
+  try {
+    const pageCtx = gatherPageContext(appState.currentView);
+    const res = await fetch("/api/agent/explain", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        page: appState.currentView,
+        message: text,
+        page_context: pageCtx,
+        history: agentState.historyExplain.slice(-6),
+      }),
+    });
+
+    const data = await res.json();
+    removeThinkingPulse();
+    agentState.isProcessing = false;
+
+    if (!res.ok) {
+      const errBubble = document.createElement("div");
+      errBubble.className = "gp-bubble gp-bubble-agent";
+      errBubble.textContent = `Error: ${data.detail || "Could not generate explanation"}`;
+      body.appendChild(errBubble);
+      return;
+    }
+
+    agentState.historyExplain.push({ role: "assistant", content: data.reply });
+
+    const agentBubble = document.createElement("div");
+    agentBubble.className = "gp-bubble gp-bubble-agent";
+    agentBubble.style.whiteSpace = "pre-line";
+    agentBubble.innerHTML = data.reply
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\n\n/g, '<br><br>');
+    body.appendChild(agentBubble);
+
+    if (data.suggested_followups && data.suggested_followups.length > 0) {
+      const followContainer = document.createElement("div");
+      followContainer.className = "gp-quick-prompts";
+      followContainer.innerHTML = '<div class="gp-quick-prompts-label">Follow-up Questions:</div>';
+      data.suggested_followups.forEach(fq => {
+        const chip = document.createElement("button");
+        chip.className = "gp-quick-chip";
+        chip.textContent = `• ${fq}`;
+        chip.addEventListener("click", () => sendAgentExplainMessage(fq));
+        followContainer.appendChild(chip);
+      });
+      body.appendChild(followContainer);
+    }
+
+    const chatBody = document.getElementById("agentChatBody");
+    if (chatBody) chatBody.scrollTop = chatBody.scrollHeight;
+  } catch (err) {
+    removeThinkingPulse();
+    agentState.isProcessing = false;
+    const errBubble = document.createElement("div");
+    errBubble.className = "gp-bubble gp-bubble-agent";
+    errBubble.textContent = `Connection error: ${err.message}`;
+    body.appendChild(errBubble);
   }
 }
 
@@ -531,6 +801,7 @@ async function loadDemoData() {
     appState.sessionId = data.session_id;
     appState.neighborhoods = data.preview;
 
+    updateSyntheticDatasetBadge(false);
     renderDataInputTable(data.preview);
     renderDemandMap(data.preview);
     updateDashboardStats();
@@ -1370,6 +1641,7 @@ function setupEventListeners() {
 
       appState.sessionId = data.session_id;
       appState.neighborhoods = data.preview;
+      updateSyntheticDatasetBadge(false);
       renderDataInputTable(data.preview);
       renderDemandMap(data.preview);
       updateDashboardStats();
@@ -1406,6 +1678,7 @@ function setupEventListeners() {
       }
       appState.sessionId = data.session_id;
       appState.neighborhoods = data.preview;
+      updateSyntheticDatasetBadge(false);
       renderDataInputTable(data.preview);
       renderDemandMap(data.preview);
       modalManual.classList.remove("active");
@@ -1415,6 +1688,80 @@ function setupEventListeners() {
       alert(`Invalid JSON format: ${err.message}`);
     }
   });
+
+  // 6.5 AI Synthetic Data Generator (Phase 3)
+  const btnDataAIGen = document.getElementById("btnDataAIGenerate");
+  if (btnDataAIGen) {
+    btnDataAIGen.addEventListener("click", () => {
+      toggleAgentDrawer(true, "synthetic");
+    });
+  }
+
+  const inputSynthZones = document.getElementById("inputSynthZones");
+  if (inputSynthZones) {
+    inputSynthZones.addEventListener("input", (e) => {
+      const valEl = document.getElementById("valSynthZones");
+      if (valEl) valEl.textContent = `${e.target.value} zones`;
+    });
+  }
+
+  const btnCancelSynth = document.getElementById("btnCancelSynthetic");
+  if (btnCancelSynth) {
+    btnCancelSynth.addEventListener("click", () => {
+      setAgentMode("setup");
+    });
+  }
+
+  const btnConfirmSynth = document.getElementById("btnConfirmGenerateSynthetic");
+  if (btnConfirmSynth) {
+    btnConfirmSynth.addEventListener("click", async () => {
+      const zoneCount = parseInt(document.getElementById("inputSynthZones")?.value) || 50;
+      const pattern = document.getElementById("selectSynthPattern")?.value || "clustered";
+      const region = document.getElementById("selectSynthRegion")?.value || "bengaluru";
+
+      btnConfirmSynth.disabled = true;
+      btnConfirmSynth.textContent = "Generating & Validating...";
+
+      try {
+        const res = await fetch("/api/agent/generate-synthetic-data", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            zone_count: zoneCount,
+            pattern_hint: pattern,
+            city_hint: region,
+            session_id: appState.sessionId,
+          }),
+        });
+
+        const data = await res.json();
+        btnConfirmSynth.disabled = false;
+        btnConfirmSynth.textContent = "Generate Synthetic Data";
+
+        if (!res.ok) {
+          showErrorModal("Synthetic Generation Error", data.detail?.error || "Generation failed", data.detail?.errors || []);
+          return;
+        }
+
+        appState.sessionId = data.session_id;
+        appState.neighborhoods = data.preview;
+        updateSyntheticDatasetBadge(true);
+        renderDataInputTable(data.preview);
+        renderDemandMap(data.preview);
+        updateDashboardStats();
+        updateLiveSummary();
+
+        toggleAgentDrawer(false);
+        showToast(`Generated & validated ${data.neighborhood_count} synthetic zones (${data.total_demand.toLocaleString()} orders/day) labeled [AI-Generated Synthetic Dataset].`);
+        await runOptimization();
+        switchView("viewResults");
+      } catch (err) {
+        btnConfirmSynth.disabled = false;
+        btnConfirmSynth.textContent = "Generate Synthetic Data";
+        showErrorModal("Generation Failed", err.message);
+      }
+    });
+  }
 
   // 7. Configuration View Controls
   const inputP = document.getElementById("inputConfigP");
@@ -1454,7 +1801,7 @@ function setupEventListeners() {
     switchView("viewResults");
   });
 
-  // 7.5 Conversational Logistics Agent Controls (Phase 2)
+  // 7.5 Conversational Logistics Agent & Explain Mode (Phases 2, 3 & 4)
   const btnOpenAgent = document.getElementById("btnOpenAgentDrawer");
   if (btnOpenAgent) {
     btnOpenAgent.addEventListener("click", () => toggleAgentDrawer(true));
@@ -1470,27 +1817,72 @@ function setupEventListeners() {
     backdropAgent.addEventListener("click", () => toggleAgentDrawer(false));
   }
 
+  // Drawer Mode Switcher Buttons
+  const btnModeSetup = document.getElementById("btnModeSetup");
+  if (btnModeSetup) {
+    btnModeSetup.addEventListener("click", () => setAgentMode("setup"));
+  }
+
+  const btnModeExplain = document.getElementById("btnModeExplain");
+  if (btnModeExplain) {
+    btnModeExplain.addEventListener("click", () => setAgentMode("explain"));
+  }
+
+  // Header & In-Screen Explain Buttons
+  const btnHeaderExplain = document.getElementById("btnHeaderExplain");
+  if (btnHeaderExplain) {
+    btnHeaderExplain.addEventListener("click", () => {
+      toggleAgentDrawer(true, "explain");
+    });
+  }
+
+  document.querySelectorAll(".gp-btn-explain-screen").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const view = btn.getAttribute("data-explain-view");
+      if (view && view !== appState.currentView) {
+        switchView(view);
+      }
+      toggleAgentDrawer(true, "explain");
+    });
+  });
+
   const btnSendAgent = document.getElementById("btnAgentSend");
   const inputAgent = document.getElementById("agentInput");
 
   if (btnSendAgent && inputAgent) {
-    btnSendAgent.addEventListener("click", () => {
-      sendAgentMessage(inputAgent.value);
-    });
+    const handleSend = () => {
+      const val = inputAgent.value;
+      if (!val || !val.trim()) return;
+      if (agentState.mode === "explain") {
+        sendAgentExplainMessage(val);
+      } else {
+        sendAgentMessage(val);
+      }
+    };
+
+    btnSendAgent.addEventListener("click", handleSend);
 
     inputAgent.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        sendAgentMessage(inputAgent.value);
+        handleSend();
       }
     });
   }
 
-  // Quick Chips in Initial Agent State
+  // Quick Chips in Initial Agent Setup State
   document.querySelectorAll("#agentQuickPrompts .gp-quick-chip").forEach(chip => {
     chip.addEventListener("click", () => {
       const promptText = chip.getAttribute("data-prompt");
       if (promptText) sendAgentMessage(promptText);
+    });
+  });
+
+  // Quick Chips in Initial Agent Explain State
+  document.querySelectorAll("#agentExplainQuickPrompts [data-explain-q]").forEach(chip => {
+    chip.addEventListener("click", () => {
+      const q = chip.getAttribute("data-explain-q");
+      if (q) sendAgentExplainMessage(q);
     });
   });
 

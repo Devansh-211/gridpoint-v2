@@ -1287,13 +1287,19 @@ input[type="range"].gp-range {
 
 /* Drawer Header */
 .gp-agent-header {
-  padding: var(--gp-space-4) var(--gp-space-5);
+  padding: var(--gp-space-3) var(--gp-space-4);
   border-bottom: 1px solid var(--gp-border);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gp-space-2);
+  flex-shrink: 0;
+  background-color: var(--gp-surface);
+}
+
+.gp-agent-header-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-shrink: 0;
-  background-color: var(--gp-surface);
 }
 
 .gp-agent-header-left {
@@ -1303,8 +1309,8 @@ input[type="range"].gp-range {
 }
 
 .gp-agent-avatar {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: var(--gp-radius-sm);
   background-color: var(--gp-primary-50);
   color: var(--gp-primary-600);
@@ -1315,7 +1321,7 @@ input[type="range"].gp-range {
 }
 
 .gp-agent-header-titles h3 {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: var(--gp-weight-bold);
   color: var(--gp-text-primary);
   line-height: 1.2;
@@ -1324,6 +1330,91 @@ input[type="range"].gp-range {
 .gp-agent-header-titles span {
   font-size: 11px;
   color: var(--gp-text-tertiary);
+}
+
+/* Mode Switcher Tabs */
+.gp-agent-mode-switcher {
+  display: flex;
+  background-color: var(--gp-surface-sunken);
+  border: 1px solid var(--gp-border);
+  border-radius: var(--gp-radius-sm);
+  padding: 2px;
+  gap: 2px;
+}
+
+.gp-agent-mode-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-family: var(--gp-font-family-sans);
+  font-size: 11px;
+  font-weight: var(--gp-weight-semibold);
+  color: var(--gp-text-secondary);
+  cursor: pointer;
+  transition: all var(--gp-transition-fast);
+  text-align: center;
+}
+
+.gp-agent-mode-btn:hover {
+  color: var(--gp-text-primary);
+}
+
+.gp-agent-mode-btn.active {
+  background-color: var(--gp-surface);
+  color: var(--gp-primary-600);
+  box-shadow: var(--gp-shadow-sm);
+}
+
+/* Explain Grounding Banner */
+.gp-agent-explain-banner {
+  background-color: var(--gp-surface-sunken);
+  border: 1px solid var(--gp-border);
+  border-radius: var(--gp-radius-sm);
+  padding: var(--gp-space-2) var(--gp-space-3);
+  font-size: 11px;
+  color: var(--gp-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: var(--gp-space-2);
+  border-left: 3px solid var(--gp-primary-500);
+}
+
+/* Synthetic Dataset Badge */
+.gp-badge-synthetic {
+  background-color: #FFF1F2;
+  color: #BE123C;
+  border: 1px solid #FECDD3;
+  font-size: 10px;
+  font-weight: var(--gp-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+/* Synthetic Generator Card inside Drawer */
+.gp-agent-synthetic-card {
+  background-color: var(--gp-surface);
+  border: 1px solid var(--gp-border);
+  border-radius: var(--gp-radius-md);
+  box-shadow: var(--gp-shadow-sm);
+  padding: var(--gp-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--gp-space-3);
+}
+
+.gp-agent-consent-box {
+  background-color: #FFFBEB;
+  border: 1px solid #FDE68A;
+  border-radius: var(--gp-radius-sm);
+  padding: var(--gp-space-3);
+  font-size: 11px;
+  color: #92400E;
+  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 /* Chat Body */

@@ -24,6 +24,8 @@ class UploadResponse(BaseModel):
     neighborhood_count: int
     total_demand: float
     preview: List[NeighborhoodItem]
+    is_synthetic_ai: Optional[bool] = False
+    dataset_type: Optional[str] = "demo"
 
 
 # 2. Optimization models
@@ -227,4 +229,35 @@ class AgentExtractResponse(BaseModel):
     extracted_params: ExtractedParams
     missing_required: List[str] = []
     ready_to_optimize: bool = False
+    defaults_applied: Optional[List[str]] = []
+    warnings: Optional[List[str]] = []
+    suggested_prompts: Optional[List[str]] = []
+    confirmation_card: Optional[Dict[str, Any]] = None
+
+
+# 8. Synthetic Data Generation models (Phase 3)
+class SyntheticDataRequest(BaseModel):
+    zone_count: Optional[int] = Field(default=50, description="Requested number of delivery zones (10-150)")
+    pattern: Optional[str] = Field(default="clustered", description="'clustered', 'multi_hub', or 'corridor'")
+    pattern_hint: Optional[str] = Field(default=None)
+    region_name: Optional[str] = Field(default="Bengaluru Metro", description="City/region naming flavor")
+    city_hint: Optional[str] = Field(default=None)
+    session_id: Optional[str] = Field(default="default")
+
+
+# 9. Grounded Explain Mode models (Phase 4)
+class AgentExplainRequest(BaseModel):
+    page: str = Field(description="Active page identifier e.g. 'viewResults', 'viewScenarios', 'viewDisruption', 'viewFleet', 'viewAnalytics'")
+    message: str = Field(description="User question about the current screen")
+    page_context: Dict[str, Any] = Field(description="Real computed metrics, tables, and parameters currently on this screen")
+    history: Optional[List[AgentMessage]] = Field(default=[])
+
+
+class AgentExplainResponse(BaseModel):
+    reply: str
+    page: str
+    grounded: bool = True
+    grounded_facts: List[str] = []
+    suggested_followups: List[str] = []
+
 

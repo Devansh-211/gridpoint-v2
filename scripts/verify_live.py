@@ -76,7 +76,44 @@ def run_verification():
     assert confirm_data['extracted_params']['max_service_radius_km'] == 25.0
     print(f"[PASS] Agent Extraction (Confirmation): status={confirm_data['status']}, p={confirm_data['extracted_params']['warehouse_count']}, cap={confirm_data['extracted_params']['warehouse_capacity']}, radius={confirm_data['extracted_params']['max_service_radius_km']}")
 
-    print("\nALL 12 LIVE SYSTEM CHECKS PASSED WITH 100% SUCCESS!")
+    # Test Phase 3: AI Synthetic Demand Generation
+    r_synth = requests.post(f'{base}/api/agent/generate-synthetic-data', json={
+        'zone_count': 40,
+        'pattern_hint': 'clustered',
+        'city_hint': 'bengaluru'
+    })
+    assert r_synth.status_code == 200, f"Synthetic generation failed: {r_synth.text}"
+    synth_data = r_synth.json()
+    assert synth_data['neighborhood_count'] == 40
+    assert synth_data['is_synthetic_ai'] is True
+    assert synth_data['dataset_type'] == 'ai_synthetic'
+    print(f"[PASS] AI Synthetic Data Generation: {synth_data['neighborhood_count']} non-uniform zones, Total Demand: {synth_data['total_demand']:,.0f} ord/day, is_synthetic_ai={synth_data['is_synthetic_ai']}")
+
+    # Test Phase 4: Per-Page Grounded Explain Mode
+    page_context = {
+        'view': 'viewResults',
+        'status': 'Optimal',
+        'warehouse_count': 3,
+        'total_delivery_cost': opt_data['total_delivery_cost'],
+        'estimated_monthly_savings': opt_data['estimated_monthly_savings'],
+        'warehouses': [
+            {'name': w['name'], 'assigned_demand': w['assigned_demand'], 'capacity': w['capacity'], 'capacity_utilization_pct': w['capacity_utilization_pct']}
+            for w in opt_data['warehouses']
+        ]
+    }
+    r_explain = requests.post(f'{base}/api/agent/explain', json={
+        'page': 'viewResults',
+        'message': 'Why were these locations selected and what is the capacity utilization breakdown?',
+        'page_context': page_context,
+        'history': []
+    })
+    assert r_explain.status_code == 200, f"Explain endpoint failed: {r_explain.text}"
+    explain_data = r_explain.json()
+    assert explain_data['grounded'] is True
+    assert len(explain_data['grounded_facts']) > 0
+    print(f"[PASS] Per-Page Grounded Explainer: page={explain_data['page']}, grounded={explain_data['grounded']}, facts={len(explain_data['grounded_facts'])}, reply='{explain_data['reply'][:70]}...'")
+
+    print("\nALL 14 LIVE SYSTEM & AI AGENT CHECKS PASSED WITH 100% SUCCESS!")
 
 if __name__ == '__main__':
     run_verification()

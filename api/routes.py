@@ -38,8 +38,11 @@ from api.schemas import (
     NextBestCandidate,
     AgentExtractRequest,
     AgentExtractResponse,
+    SyntheticDataRequest,
+    AgentExplainRequest,
+    AgentExplainResponse,
 )
-from api.agent import process_agent_dialog
+from api.agent import process_agent_dialog, generate_synthetic_demand_dataset, process_agent_explanation
 
 logger = logging.getLogger(__name__)
 
@@ -826,4 +829,97 @@ def extract_agent_parameters(req: AgentExtractRequest):
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Agent parameter extraction failed: {str(e)}",
         )
+
+
+@router.post("/agent/generate-synthetic-data", response_model=UploadResponse)
+def generate_synthetic_data(req: SyntheticDataRequest):
+    """Generates a realistic non-uniform clustered synthetic dataset with explicit consent.
+    Strictly validates output through the identical core data contract validator.
+    """
+    try:
+        zone_cnt = req.zone_count if req.zone_count is not None else 50
+        pat = req.pattern_hint or req.pattern or "clustered"
+        reg = req.city_hint or req.region_name or "Bengaluru"
+        is_valid, errors, clean_df = generate_synthetic_demand_dataset(
+            zone_count=zone_cnt,
+            pattern=pat,
+            region_name=reg,
+        )
+        if not is_valid or clean_df is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"errors": errors},
+            )
+
+        session_id = req.session_id if req.session_id and req.session_id != "default" else str(uuid.uuid4())[:8]
+        neighborhoods = [
+            Neighborhood(
+                id=str(row["neighborhood_id"]).strip(),
+                name=str(row["name"]).strip(),
+                latitude=float(row["latitude"]),
+                longitude=float(row["longitude"]),
+                daily_orders=float(row["daily_orders"]),
+                capacity=float(row["capacity"]) if "capacity" in row and pd.notna(row["capacity"]) else None,
+            )
+            for _, row in clean_df.iterrows()
+        ]
+
+        SESSION_STORE[session_id] = {
+            "neighborhoods": neighborhoods,
+            "df": clean_df,
+            "last_optimize": None,
+            "last_matrix": None,
+            "is_synthetic_ai": True,
+            "dataset_type": "ai_synthetic",
+        }
+
+        total_demand = sum(n.daily_orders for n in neighborhoods)
+        preview_items = [
+            NeighborhoodItem(
+                neighborhood_id=n.id,
+                name=n.name,
+                latitude=n.latitude,
+                longitude=n.longitude,
+                daily_orders=n.daily_orders,
+                capacity=n.capacity,
+            )
+            for n in neighborhoods
+        ]
+
+        return UploadResponse(
+            session_id=session_id,
+            neighborhood_count=len(neighborhoods),
+            total_demand=round(total_demand, 1),
+            preview=preview_items,
+            is_synthetic_ai=True,
+            dataset_type="ai_synthetic",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Error generating synthetic dataset: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Synthetic data generation failed: {str(e)}",
+        )
+
+
+@router.post("/agent/explain", response_model=AgentExplainResponse)
+def explain_page_context(req: AgentExplainRequest):
+    """Answers user queries grounded strictly in the real computed data of the current screen."""
+    try:
+        result = process_agent_explanation(
+            page=req.page,
+            message=req.message,
+            page_context=req.page_context,
+            history=req.history,
+        )
+        return AgentExplainResponse(**result)
+    except Exception as e:
+        logger.error("Error in agent page explain: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Explanation generation failed: {str(e)}",
+        )
+
 
