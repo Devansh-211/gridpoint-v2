@@ -221,3 +221,34 @@ Open your browser to: **`http://127.0.0.1:8000/`** (Interactive API Swagger Docs
 - **Code Generation & Boilerplate Acceleration:** Drafting FastAPI endpoint scaffolding, Pydantic data schemas, and Leaflet layer management bindings.
 - **Frontend Refinement:** Assisting in the translation of design system tokens (light theme with soft blue accents, CSS variables, responsive typography) and Chart.js options.
 - **Test Generation Support:** Accelerating test fixture construction for edge cases (duplicate IDs, out-of-bounds coordinates, presolve infeasibility).
+
+---
+
+## 10. Credits & Open Source Acknowledgements
+
+GRIDPOINT is built upon open data, open-source mathematical solvers, and community-driven geospatial tools. We gratefully acknowledge the following projects and resources:
+
+### Open Data & Geographic Sources
+- **[OpenStreetMap (OSM)](https://www.openstreetmap.org/)**: Geographic coordinate reference data and locality centroids for Bengaluru metropolitan wards and urban hubs (licensed under the [Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/)).
+- **[CARTO Base Maps (Positron & Dark Matter)](https://carto.com/basemaps/)**: Open-access map tile services used for rendering the interactive Leaflet centerpiece map and cluster assignment spider lines (Map tiles © CARTO, Data © OpenStreetMap contributors).
+- **[Bruhat Bengaluru Mahanagara Palike (BBMP) Open Data & Census of India](https://bbmp.gov.in/)**: Urban ward boundaries, commercial density patterns, and population distributions that informed the realistic demand volumes and clustering parameters in `demo_neighborhoods.csv`.
+- **[Project-OSRM (Open Source Routing Machine)](http://project-osrm.org/)**: Road network routing abstractions and distance matrix protocols informing the geospatial matrix routing layer.
+
+### Open-Source Solvers & Computational Libraries
+- **[COIN-OR CBC (Coin-or branch and cut)](https://github.com/coin-or/Cbc)**: High-performance open-source Mixed Integer Linear Programming (MILP) solver used to compute optimal facility locations for the Capacitated Facility Location Problem (CFLP).
+- **[PuLP](https://github.com/coin-or/pulp)**: Python linear programming modeler (BSD License) used to formulate the CFLP objective and constraints.
+- **[Google OR-Tools](https://developers.google.com/optimization)**: Combinatorial optimization library (Apache 2.0 License) used for multi-stop vehicle tour optimization in the Capacitated Vehicle Routing Problem (CVRP).
+- **[Pandas](https://pandas.pydata.org/) & [NumPy](https://numpy.org/)**: Open-source data manipulation, validation, and vectorized geospatial distance matrix computing (BSD License).
+
+### Frontend Geospatial & UI Libraries
+- **[Leaflet.js](https://leafletjs.com/)**: Leading open-source JavaScript library for mobile-friendly interactive maps (BSD 2-Clause License).
+- **[Chart.js](https://www.chartjs.org/)**: Simple yet flexible JavaScript charting library for designers and developers (MIT License).
+- **[Lucide Icons](https://lucide.dev/)**: Clean, consistent icon set for user interface actions and status indicators (ISC License).
+- **[Google Fonts (Inter & JetBrains Mono)](https://fonts.google.com/)**: High-legibility typography designed for user interfaces and data-dense operational displays (SIL Open Font License).
+
+### Backend & Testing Frameworks
+- **[FastAPI](https://fastapi.tiangolo.com/) & [Starlette](https://www.starlette.io/)**: Modern, fast web framework for building APIs with Python (MIT License).
+- **[Uvicorn](https://www.uvicorn.org/)**: Lightning-fast ASGI server implementation (BSD-3-Clause License).
+- **[Pydantic](https://docs.pydantic.dev/)**: Data validation and settings management using Python type annotations (MIT License).
+- **[Pytest](https://pytest.org/) & [HTTPX](https://www.python-httpx.org/)**: Robust testing frameworks for Python (MIT & BSD Licenses).
+
