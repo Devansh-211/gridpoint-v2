@@ -11,7 +11,8 @@
 - **Save more:** Quantifies daily and monthly cost reductions over a rigorous **Single-Warehouse Reference Baseline** (1-median center).
 - **Plan for disruption:** Interactive Scenario Lab simulating demand surges (+20% weekend, +50% festival peaks) and facility outage re-routing.
 - **Explainable intelligence:** "Why this location?" mathematical intelligence breaking down key demand drivers and the exact score gap of rejected candidate facilities.
-- **Tactical fleet execution:** Optional Capacitated Vehicle Routing Problem (CVRP) solving multi-stop vehicle tours via **Google OR-Tools Guided Local Search**.
+- **Tactical fleet execution:** Dedicated Capacitated Vehicle Routing Problem (CVRP) solving multi-stop vehicle tours via **Google OR-Tools Guided Local Search**.
+- **Modern B2B Design System:** 10-screen persistent Left-Rail navigation architecture built with custom design tokens, responsive typography, and strict product honesty rules.
 
 ---
 
@@ -61,12 +62,31 @@ For opened warehouses with assigned delivery zone clusters, GRIDPOINT executes a
 - **Backend:** Python 3.11+ / 3.14, FastAPI, Uvicorn (`uvicorn app:app --reload`).
 - **Optimization:** PuLP + CBC (Coin-or branch and cut), Google OR-Tools (CVRP Guided Local Search).
 - **Data & Math:** Pandas, NumPy, Haversine Geospatial Matrix Engine.
-- **Frontend:** HTML5, CSS3 (Light Theme Design System), Vanilla JavaScript (Single State Architecture).
+- **Frontend:** Semantic HTML5, CSS3 Tokens Design System (`tokens.css`, `style.css`), Vanilla JavaScript (`app.js` Single State Architecture).
 - **Geospatial & Charts:** Leaflet.js (interactive maps & cluster rendering), Chart.js (trade-off curves & analytics).
 
 ---
 
-## 4. Project Directory Structure
+## 4. Information Architecture & Navigation
+
+The platform is structured into a persistent **Left-Rail application shell** across 10 distinct, fully-grounded screens:
+
+| Category | Screen | ID | Key Capabilities |
+|---|---|---|---|
+| **Setup** | **Landing & Entry** | `viewLanding` | Overview of system capabilities, quickstart buttons to load demo data or upload CSV. |
+| **Setup** | **Dashboard Overview** | `viewDashboard` | High-level operations workspace summary with session metrics and 4-step workflow cards. |
+| **Setup** | **Demand Data Ingestion** | `viewData` | CSV drag-and-drop, validation feedback banner, raw JSON editor, and interactive Demand Map. |
+| **Setup** | **Network Configuration** | `viewConfig` | Facility count $p$, capacity, radius $R_{\max}$, priority presets (Cost, Speed, Green), and live plain-language summary line. |
+| **Results** | **Optimization Results** | `viewResults` | Centerpiece Leaflet map with layer toggles, 6 executive KPI cards with `[Estimate]` badges & delta chips, baseline comparison benchmark table, facility manifest, "Why here?" decision intelligence, and demand-weighting explainer. |
+| **Results** | **Scenario Lab (What-If)** | `viewScenarios` | Demand shock simulation (Normal 1.0x, Weekend +20%, Festival +50%) with before/after comparisons and topology shift detection. |
+| **Results** | **Disruption & Resilience** | `viewDisruption` | Single-point-of-failure facility outage simulator with emergency zone reassignment and cost impact analysis. |
+| **Results** | **Tactical Fleet Routing** | `viewFleet` | Dedicated Google OR-Tools CVRP routing screen: turn-by-turn vehicle stop sequences, payload utilization bars, and fleet distance manifests. |
+| **Reference** | **Analytics & Trade-off** | `viewAnalytics` | Facility count vs. delivery cost trade-off curve ($p=1..5$) with Chart.js, diminishing returns curve, and visible on-screen CO₂ emissions formula footnote ($0.21 \text{ kg CO}_2/\text{km}$). |
+| **Reference** | **Methodology & About** | `viewMethodology` | CFLP Integer Program formulation, CVRP formulation, the 8 Product Honesty Rules, tech stack summary, and Hackathon AI Usage Disclosure. |
+
+---
+
+## 5. Project Directory Structure
 
 ```
 gridpoint/
@@ -92,13 +112,15 @@ gridpoint/
 │   ├── baseline.py          # 1-median Single-Warehouse Reference Baseline calculation
 │   └── scenario.py          # Demand shock (+20%, +50%) & warehouse outage simulator
 ├── static/
-│   ├── index.html           # Light-theme dashboard with step navigation ribbon
-│   ├── style.css            # Modern B2B logistics design system with soft blue accents
-│   └── app.js               # Reactive client state, Leaflet geospatial engine & Chart.js
+│   ├── tokens.css           # Design tokens (colors, typography, 8px spacing, elevation)
+│   ├── style.css            # Component library (buttons, cards, KPIs, tables, skeletons, error banners)
+│   ├── index.html           # 10-screen Left-Rail application shell
+│   └── app.js               # Reactive client router, Leaflet geospatial engine & Chart.js
 ├── tests/
-│   ├── test_api.py          # REST endpoint integration tests (26 test suites)
+│   ├── test_api.py          # REST endpoint integration tests (12 test suites)
 │   ├── test_cflp.py         # CFLP solver unit tests
 │   ├── test_cvrp.py         # CVRP routing unit tests
+│   ├── test_metrics.py      # Financial & delta metrics tests
 │   └── test_validation.py   # Presolve validation tests
 ├── app.py                   # Application entrypoint & CBC solver startup verification
 ├── config.py                # Configuration constants & defaults
@@ -108,7 +130,7 @@ gridpoint/
 
 ---
 
-## 5. Quickstart & Installation
+## 6. Quickstart & Installation
 
 ### Prerequisites
 - Python 3.11+
@@ -117,7 +139,7 @@ gridpoint/
 ### 1. Set Up Environment
 ```bash
 # Clone the repository
-git clone https://github.com/your-repo/gridpoint.git
+git clone https://github.com/Devansh-211/gridpoint.git
 cd gridpoint
 
 # Create and activate virtual environment
@@ -145,21 +167,21 @@ Open your browser to: **`http://127.0.0.1:8000/`** (Interactive API Swagger Docs
 
 ---
 
-## 6. End-to-End Demo Script (Under 2 Minutes)
+## 7. End-to-End Demo Script (Under 2 Minutes)
 
-1. **One-Click Demo Ingestion:** Click **"Load Bengaluru Demo"** in the top navigation bar. 36 delivery zones instantly load with proportional circle markers.
-2. **Configure Facilities:** Set warehouse count $p = 3$, site capacity $= 4,000$ orders/day, and select **"Cost Focus"** priority preset. Observe the live summary update: *"Planning a 3-warehouse network serving 36 delivery zones with 12,000 orders/day capacity."*
+1. **One-Click Demo Ingestion:** Click **"Load Bengaluru Demo"** in the top navigation bar or landing screen. 36 delivery zones instantly load with proportional circle markers.
+2. **Configure Facilities:** In **Network Configuration**, set warehouse count $p = 3$, site capacity $= 4,000$ orders/day, and select **"Cost Focus"** priority preset. Observe the live summary update: *"Planning a 3-warehouse network serving 36 delivery zones with 12,000 orders/day capacity."*
 3. **Run Optimization:** Click **"Run Network Optimization"**. Within 1–2 seconds, the MILP solver returns the proven optimal 3-facility network.
-4. **Inspect Centerpiece Map:** View selected warehouses (custom building pins), cluster assignment spider lines, and translucent service radius rings.
+4. **Inspect Centerpiece Map:** In **Optimization Results**, view selected warehouses (custom building pins), cluster assignment spider lines, and translucent service radius rings.
 5. **Review Demand-Weighting Explainer:** Inspect the live dynamic panel showing why high-demand zones (e.g. Koramangala, 420 orders) exert greater mathematical pull than low-demand zones (e.g. Kengeri, 150 orders).
 6. **Inspect "Why this location?":** Select a warehouse in the intelligence tab to review its assigned volume, capacity utilization %, top 3 demand drivers, and the **score gap of the runner-up rejected candidate**.
-7. **Evaluate Trade-off Curve:** Switch to the Trade-off tab to review the diminishing returns curve ($p = 1 \dots 5$) balancing delivery distance reduction against fixed facility leases.
-8. **Run Disruption Test:** Switch to the Scenario Lab and click **"Festival Surge (+50%)"** or simulate a warehouse outage to test network resilience and automatic load reassignment.
-9. **Tactical CVRP Routes:** Enable **"Refine with CVRP (OR-Tools)"** in the sidebar to review turn-by-turn vehicle tours and vehicle payload utilization.
+7. **Evaluate Trade-off Curve:** Switch to **Analytics & Trade-off** to review the diminishing returns curve ($p = 1 \dots 5$) balancing delivery distance reduction against fixed facility leases.
+8. **Run Disruption Test:** Switch to **Disruption & Resilience** or **Scenario Lab** and click **"Festival Surge (+50%)"** or simulate a warehouse outage to test network resilience and automatic load reassignment.
+9. **Tactical CVRP Routes:** Switch to **Tactical Fleet (CVRP)** to review turn-by-turn vehicle tours and vehicle payload utilization.
 
 ---
 
-## 7. Transparency, Terminology & Honesty Rules
+## 8. Transparency, Terminology & Honesty Rules
 
 - **Distance Metric:** All straight-line distances are explicitly labeled **"Geographic delivery distance"** ($R \approx 6371\text{ km}$, Haversine formula) — never implied to be exact road distance.
 - **Baseline Benchmark:** Comparisons are explicitly labeled **"Single-Warehouse Reference Baseline vs Optimized Network"** (computed dynamically from the 1-median facility center).
@@ -169,7 +191,7 @@ Open your browser to: **`http://127.0.0.1:8000/`** (Interactive API Swagger Docs
 
 ---
 
-## 8. Mandatory Hackathon AI Usage Disclosure
+## 9. Mandatory Hackathon AI Usage Disclosure
 
 *In compliance with Hackathon Rule §17 on AI Transparency and Integrity:*
 
