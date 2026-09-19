@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GRIDPOINT — Intelligent Warehouse Location & Delivery Network Optimizer</title>
+  <link rel="stylesheet" href="/style.css">
+  <!-- Leaflet Map CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header class="navbar">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path>
+          <polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline>
+          <line x1="12" y1="22.08" x2="12" y2="12"></line>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1>GRIDPOINT</h1>
+        <span>Mathematical intelligence for smarter delivery networks</span>
+      </div>
+    </div>
+    
+    <div class="nav-actions">
+      <div class="status-badge" id="solverStatusBadge">
+        <span class="status-dot"></span>
+        <span id="solverStatusText">Solver: CBC Active</span>
+      </div>
+      <button class="btn btn-secondary btn-sm" id="btnLoadDemo" title="Load curated 36-zone Bengaluru synthetic dataset">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+        <span>Load Bengaluru Demo</span>
+      </button>
+      <label class="btn btn-secondary btn-sm" style="margin:0; cursor:pointer;" title="Upload neighborhood CSV dataset">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+        <span>Upload CSV</span>
+        <input type="file" id="csvFileInput" accept=".csv" style="display:none;">
+      </label>
+      <button class="btn btn-secondary btn-sm" id="btnOpenManualEntry" title="Inspect or paste raw JSON dataset">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+        <span>Raw JSON</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Workflow Ribbon Navigation -->
+  <nav class="workflow-ribbon">
+    <button class="step-tab active" data-step="stepDemand">
+      <span class="step-num">1</span>
+      <span>Demand Map & Data</span>
+    </button>
+    <button class="step-tab" data-step="stepConfig">
+      <span class="step-num">2</span>
+      <span>Network Configuration</span>
+    </button>
+    <button class="step-tab" data-step="stepResults">
+      <span class="step-num">3</span>
+      <span>Optimization Results</span>
+    </button>
+    <button class="step-tab" data-step="stepBenchmark">
+      <span class="step-num">4</span>
+      <span>Trade-off & Baseline</span>
+    </button>
+    <button class="step-tab" data-step="stepScenario">
+      <span class="step-num">5</span>
+      <span>Scenario Lab ("What If")</span>
+    </button>
+    <button class="step-tab" data-step="stepFleet">
+      <span class="step-num">6</span>
+      <span>Fleet Manifests (CVRP)</span>
+    </button>
+  </nav>
+
+  <!-- App Layout -->
+  <div class="app-layout">
+    
+    <!-- Sidebar Controls -->
+    <aside class="sidebar">
+      
+      <!-- 1. Strategic Facilities Configuration -->
+      <div class="sidebar-section">
+        <div class="sidebar-title">
+          <span>1. Facility Parameters</span>
+        </div>
+        
+        <div class="form-group">
+          <div class="form-label">
+            <span>Warehouse Count (p)</span>
+            <span class="val" id="valP">3</span>
+          </div>
+          <input type="range" id="inputP" min="1" max="5" value="3" step="1">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">
+            <span>Site Capacity (orders/day)</span>
+          </div>
+          <input type="number" id="inputCapacity" value="4000" min="500" max="25000" step="250">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">
+            <span>Max Service Radius R_max (km)</span>
+            <span class="val" id="valRadius">No Limit</span>
+          </div>
+          <input type="number" id="inputRadius" placeholder="Optional (e.g. 25)" min="5" max="100" step="1">
+        </div>
+      </div>
+
+      <!-- 2. Optimization Priority Presets -->
+      <div class="sidebar-section">
+        <div class="sidebar-title">
+          <span>2. Optimization Priority</span>
+        </div>
+        
+        <div class="preset-grid">
+          <div class="preset-pill active" data-preset="cost">Cost Focus</div>
+          <div class="preset-pill" data-preset="speed">Speed / Radius</div>
+          <div class="preset-pill" data-preset="sustainability">Green (CO₂)</div>
+        </div>
+      </div>
+
+      <!-- 3. Delivery Cost Model & Distance -->
+      <div class="sidebar-section">
+        <div class="sidebar-title">
+          <span>3. Cost Assumptions</span>
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">
+            <span>Delivery Cost per km ($)</span>
+          </div>
+          <input type="number" id="inputCostKm" value="1.25" min="0.1" max="20" step="0.05">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">
+            <span>Fixed Warehouse Lease ($/day)</span>
+          </div>
+          <input type="number" id="inputFixedCost" value="300" min="0" max="5000" step="25">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">
+            <span>Distance Calculation</span>
+          </div>
+          <select id="selectDistanceMode">
+            <option value="haversine" selected>Haversine (Geographic Distance)</option>
+            <option value="road_detour">Road Detour (1.35x Empirical Road Proxy)</option>
+          </select>
+        </div>
+
+        <!-- Live Plain-Language Summary Box -->
+        <div class="live-summary-box" id="liveSummaryBox">
+          You are planning a <strong>3-warehouse</strong> network serving <strong>36 delivery zones</strong> with <strong>12,000 orders/day</strong> combined capacity.
+        </div>
+
+        <button class="btn btn-primary" id="btnOptimize" style="width: 100%;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+          <span id="btnOptimizeText">Run Network Optimization</span>
+        </button>
+      </div>
+
+      <!-- 4. Tactical CVRP Routing Toggle (Tier B) -->
+      <div class="sidebar-section">
+        <div class="sidebar-title">
+          <span>4. Tactical Fleet Routing</span>
+        </div>
+
+        <div class="form-group" style="margin-bottom: 8px;">
+          <label style="display:flex; align-items:center; justify-content:space-between; cursor:pointer;">
+            <span style="font-size:0.8rem; font-weight:600; color:var(--text-secondary);">Refine with CVRP (OR-Tools)</span>
+            <input type="checkbox" id="chkIncludeCvrp" style="accent-color: var(--primary); transform: scale(1.15);">
+          </label>
+        </div>
+
+        <div id="cvrpSubControls" style="display: none; margin-top: 10px; padding: 10px; background: var(--bg-surface-secondary); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm);">
+          <div class="form-group">
+            <div class="form-label">
+              <span>Vehicle Capacity (orders/van)</span>
+            </div>
+            <input type="number" id="inputVehicleCapacity" value="250" min="50" max="2000" step="25">
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0;">
+            <div class="form-label">
+              <span>Vehicle Fixed Cost ($/van)</span>
+            </div>
+            <input type="number" id="inputVehicleFixedCost" value="150" min="0" max="1000" step="10">
+          </div>
+        </div>
+      </div>
+
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      
+      <!-- Assumptions Strip -->
+      <div class="assumptions-bar" id="assumptionsBar">
+        <div><strong>Delivery Cost / km:</strong> $1.25 (Estimated)</div>
+        <div><strong>Facility Lease:</strong> $300 / site / day</div>
+        <div><strong>Warehouse Capacity:</strong> 4,000 orders/day</div>
+        <div><strong>Distance Metric:</strong> Geographic Delivery Distance (Haversine)</div>
+        <div><strong>Objective:</strong> Minimize Demand-Weighted Distance (ord·km)</div>
+      </div>
+
+      <!-- Executive KPI Cards -->
+      <section class="kpi-grid">
+        
+        <div class="kpi-card highlight">
+          <div class="kpi-title">
+            <span>Simulated Delivery Cost</span>
+            <span class="kpi-tag-estimate">[Estimate]</span>
+          </div>
+          <div class="kpi-value-row">
+            <span class="kpi-num" id="kpiCost">$0.00</span>
+            <span class="kpi-badge badge-green" id="kpiCostBadge">-0.0%</span>
+          </div>
+          <div class="kpi-sub" id="kpiCostBaseline">Baseline: $0.00 / day</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-title">
+            <span>Geographic Delivery Distance</span>
+            <span class="kpi-tag-estimate">[Estimate]</span>
+          </div>
+          <div class="kpi-value-row">
+            <span class="kpi-num" id="kpiDistance">0 <span style="font-size:0.85rem; color:var(--text-muted)">ord·km</span></span>
+            <span class="kpi-badge badge-green" id="kpiDistanceBadge">-0.0%</span>
+          </div>
+          <div class="kpi-sub" id="kpiDistanceBaseline">Baseline: 0 ord·km</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-title">
+            <span>Estimated Monthly Savings</span>
+            <span class="kpi-tag-estimate">[Estimate]</span>
+          </div>
+          <div class="kpi-value-row">
+            <span class="kpi-num" id="kpiMonthlySavings" style="color:var(--success);">$0.00</span>
+            <span class="kpi-badge badge-green">30-day</span>
+          </div>
+          <div class="kpi-sub">vs Single-Warehouse Baseline</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-title">
+            <span>Warehouses Open</span>
+            <span class="kpi-tag-estimate">[Live]</span>
+          </div>
+          <div class="kpi-value-row">
+            <span class="kpi-num" id="kpiWarehouses">0 <span style="font-size:0.85rem; color:var(--text-muted)">sites</span></span>
+            <span class="kpi-badge badge-neutral" id="kpiWarehousesBadge">p = 3</span>
+          </div>
+          <div class="kpi-sub" id="kpiSolverStatus">Status: Ready</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-title">
+            <span>Fast Delivery Proxy (&lt;5km)</span>
+            <span class="kpi-tag-estimate">[Estimate]</span>
+          </div>
+          <div class="kpi-value-row">
+            <span class="kpi-num" id="kpiFastDelivery">0.0%</span>
+            <span class="kpi-badge badge-blue">Proximity</span>
+          </div>
+          <div class="kpi-sub">Distance-based service proxy</div>
+        </div>
+
+        <div class="kpi-card">
+          <div class="kpi-title">
+            <span>Estimated Daily CO₂</span>
+            <span class="kpi-tag-estimate">[Estimate]</span>
+          </div>
+          <div class="kpi-value-row">
+            <span class="kpi-num" id="kpiCO2">0.0 <span style="font-size:0.85rem; color:var(--text-muted)">kg</span></span>
+            <span class="kpi-badge badge-green" id="kpiCO2Badge">-0.0%</span>
+          </div>
+          <div class="kpi-sub">0.21 kg/km vehicle factor</div>
+        </div>
+
+      </section>
+
+      <!-- Map Viewport -->
+      <section class="map-section">
+        <div class="map-wrapper">
+          <div id="map"></div>
+          
+          <!-- Loading Overlay -->
+          <div class="loading-overlay" id="mapLoadingOverlay">
+            <div class="spinner"></div>
+            <span style="font-weight:700; font-size:0.88rem; color:var(--text-main);">Calculating optimal delivery network...</span>
+            <span style="font-size:0.75rem; color:var(--text-muted);">Solving Capacitated Facility Location MILP via CBC</span>
+          </div>
+
+          <div class="map-overlay-controls">
+            <label>
+              <input type="checkbox" id="chkShowCandidates" checked>
+              <span>Candidate Sites</span>
+            </label>
+            <label>
+              <input type="checkbox" id="chkShowAssignments" checked>
+              <span>Assignment Lines</span>
+            </label>
+            <label>
+              <input type="checkbox" id="chkShowRadius" checked>
+              <span>Service Radius Rings</span>
+            </label>
+            <label id="lblShowRoutes" style="display: none;">
+              <input type="checkbox" id="chkShowRoutes" checked>
+              <span>Vehicle Tours (CVRP)</span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- Analytics Tabs Section -->
+      <section class="analytics-section">
+        
+        <!-- Demand-Weighting Explainer Box ("Why does demand affect warehouse placement?") -->
+        <div class="explainer-banner" id="demandExplainerBox">
+          <h4>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+            <span>Why does demand affect warehouse placement? (Mathematical Principle)</span>
+          </h4>
+          <p>
+            GRIDPOINT minimizes <strong>Total Geographic Delivery Distance weighted by demand</strong> ($\sum \text{demand}_i \times \text{distance}_{ij}$). High-demand delivery zones exert far greater mathematical pull on warehouse location than low-demand zones:
+          </p>
+          <div class="explainer-grid" id="explainerGrid">
+            <div class="explainer-card">
+              <div class="name" id="expHighName">High-Demand Zone (e.g. Koramangala)</div>
+              <div class="math" id="expHighMath">420 orders/day × 2.4 km = 1,008 order-km</div>
+              <div style="font-size:0.72rem; color:var(--text-muted); margin-top:2px;">Reducing distance here yields massive delivery cost and fleet savings.</div>
+            </div>
+            <div class="explainer-card">
+              <div class="name" id="expLowName">Low-Demand Zone (e.g. Kengeri)</div>
+              <div class="math" id="expLowMath">150 orders/day × 14.0 km = 2,100 order-km</div>
+              <div style="font-size:0.72rem; color:var(--text-muted); margin-top:2px;">Lower order volume reduces its influence on optimal warehouse placement.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tabs-nav">
+          <button class="tab-btn active" data-tab="tabComparison">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+            <span>Single-Warehouse Reference Baseline vs Optimized</span>
+          </button>
+          <button class="tab-btn" data-tab="tabTradeoff">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+            <span>Cost vs Infrastructure Trade-off (p=1..5)</span>
+          </button>
+          <button class="tab-btn" data-tab="tabExplain">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+            <span>"Why this location?" Intelligence</span>
+          </button>
+          <button class="tab-btn" data-tab="tabManifest">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg>
+            <span>Warehouse Facility Manifest</span>
+          </button>
+          <button class="tab-btn" data-tab="tabScenario">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.31"></path><path d="M14 9.3V2"></path><path d="M8.5 2h7"></path><path d="M14 9.3a6.5 6.5 0 1 1-4 0"></path><path d="M5.52 16h12.96"></path></svg>
+            <span>Scenario Lab & Resilience</span>
+          </button>
+          <button class="tab-btn" data-tab="tabRouteManifests">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m4.93 4.93 4.24 4.24"></path><path d="m14.83 9.17 4.24-4.24"></path><path d="m14.83 14.83 4.24 4.24"></path><path d="m9.17 14.83-4.24 4.24"></path></svg>
+            <span>Tactical CVRP Route Tours</span>
+          </button>
+        </div>
+
+        <!-- Tab 1: Single-Warehouse Reference Baseline vs Optimized Table -->
+        <div class="tab-content active" id="tabComparison">
+          <div class="table-card">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Performance Metric</th>
+                  <th>Single-Warehouse Reference Baseline</th>
+                  <th>Optimized Network (p Warehouses)</th>
+                  <th>Delta (Improvement)</th>
+                  <th>% Reduction / Savings</th>
+                </tr>
+              </thead>
+              <tbody id="comparisonTableBody">
+                <tr><td colspan="5" style="text-align:center; color:var(--text-dim); padding:20px;">Run network optimization to compute baseline benchmark.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Tab 2: Trade-off Curve Chart -->
+        <div class="tab-content" id="tabTradeoff">
+          <div class="card-panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">Facility Count vs Delivery Cost Trade-off Curve (p = 1 to 5)</div>
+                <div class="panel-subtitle">Demonstrates diminishing returns: more warehouses lower delivery distance but increase fixed infrastructure leases.</div>
+              </div>
+            </div>
+            <div style="height: 320px; width: 100%;">
+              <canvas id="tradeoffChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: "Why here?" Explainability Intelligence -->
+        <div class="tab-content" id="tabExplain">
+          <div class="card-panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">Warehouse Location Decision Explainability</div>
+                <div class="panel-subtitle">Generated directly from mathematical solver outputs — no fabricated reasoning.</div>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <label style="font-size:0.78rem; font-weight:600; color:var(--text-muted);">Select Facility:</label>
+                <select id="selectExplainWarehouse" style="width:auto; min-width:200px; padding:4px 8px; font-size:0.8rem;"></select>
+              </div>
+            </div>
+
+            <div id="explainContentBox">
+              <div style="color:var(--text-muted); font-size:0.84rem; text-align:center; padding:30px;">
+                Select a warehouse site above to inspect its demand drivers, capacity load, and why alternative candidates were rejected.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 4: Warehouse Facility Breakdown -->
+        <div class="tab-content" id="tabManifest">
+          <div class="table-card">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Site ID</th>
+                  <th>Warehouse Location</th>
+                  <th>Assigned Demand (orders/day)</th>
+                  <th>Site Capacity</th>
+                  <th>Utilization</th>
+                  <th>Zones Served</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="warehouseTableBody">
+                <tr><td colspan="7" style="text-align:center; color:var(--text-dim); padding:20px;">No active warehouses.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Tab 5: Scenario Lab -->
+        <div class="tab-content" id="tabScenario">
+          <div class="card-panel">
+            <div class="panel-header">
+              <div>
+                <div class="panel-title">Network Resilience & Disruption Simulator</div>
+                <div class="panel-subtitle">Evaluate surge shocks, holiday peaks, and facility outages to stress-test network continuity.</div>
+              </div>
+            </div>
+
+            <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:14px; margin-bottom:16px;">
+              <div style="background:var(--bg-surface-secondary); padding:14px; border-radius:var(--radius-sm); border:1px solid var(--border-subtle);">
+                <label style="font-size:0.78rem; font-weight:700; color:var(--text-secondary); display:block; margin-bottom:8px;">Quick Scenario Presets</label>
+                <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                  <button class="btn btn-secondary btn-sm" id="btnPresetNormal">Normal (1.0x)</button>
+                  <button class="btn btn-secondary btn-sm" id="btnPresetWeekend">Weekend (+20%)</button>
+                  <button class="btn btn-secondary btn-sm" id="btnPresetFestival">Festival Surge (+50%)</button>
+                </div>
+              </div>
+
+              <div style="background:var(--bg-surface-secondary); padding:14px; border-radius:var(--radius-sm); border:1px solid var(--border-subtle);">
+                <label style="font-size:0.78rem; font-weight:700; color:var(--text-secondary); display:block; margin-bottom:8px;">Facility Outage Test</label>
+                <div style="display:flex; gap:8px;">
+                  <select id="selectFailedWarehouse" style="flex:1;">
+                    <option value="">None (All Operational)</option>
+                  </select>
+                  <button class="btn btn-primary btn-sm" id="btnRunScenario">Simulate</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="scenarioResultBox" style="background:var(--bg-surface-secondary); border:1px solid var(--border-subtle); border-radius:var(--radius-sm); padding:16px; font-size:0.84rem; color:var(--text-secondary);">
+              Select a scenario preset or facility outage above to evaluate network capacity overflow and automated reassignment.
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 6: Route Manifests (Tier B) -->
+        <div class="tab-content" id="tabRouteManifests">
+          <div class="table-card" id="routeManifestContainer">
+            <table class="data-table" id="routeManifestTable">
+              <thead>
+                <tr>
+                  <th>Vehicle ID</th>
+                  <th>Depot / Warehouse</th>
+                  <th>Delivery Stop Sequence</th>
+                  <th>Geographic Distance</th>
+                  <th>Payload Load</th>
+                  <th>Vehicle Utilization</th>
+                </tr>
+              </thead>
+              <tbody id="routeManifestTableBody">
+                <tr>
+                  <td colspan="6" style="text-align:center; padding: 24px; color:var(--text-muted);">
+                    Enable <strong>"Refine with CVRP (OR-Tools)"</strong> in the sidebar and re-run optimization to compute detailed vehicle tours.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Manual JSON Entry Modal -->
+  <div class="modal-backdrop" id="manualEntryModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h3 style="color:var(--text-main); font-size:1rem;">Manual Delivery Zone Dataset</h3>
+          <p style="font-size:0.75rem; color:var(--text-muted);">Inspect or edit the JSON array of delivery zones.</p>
+        </div>
+        <button class="modal-close" id="btnCloseManualModal">&times;</button>
+      </div>
+      <textarea id="manualJsonArea" style="width:100%; height:260px; background:var(--bg-surface-secondary); color:var(--text-main); border:1px solid var(--border-medium); border-radius:var(--radius-sm); font-family:var(--font-mono); font-size:0.78rem; padding:10px;"></textarea>
+      <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:14px;">
+        <button class="btn btn-secondary btn-sm" id="btnCancelManual">Cancel</button>
+        <button class="btn btn-primary btn-sm" id="btnSubmitManual">Apply Dataset</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Infeasibility Diagnostics Modal -->
+  <div class="modal-backdrop" id="errorModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <span style="font-size:0.7rem; color:var(--danger); font-weight:700; text-transform:uppercase; font-family:var(--font-mono);">Optimization Warning</span>
+          <h3 style="color:var(--danger); font-size:1.05rem;" id="errorModalTitle">Configuration Infeasible</h3>
+        </div>
+        <button class="modal-close" id="btnErrorModalClose">&times;</button>
+      </div>
+      <div id="errorModalBody" style="font-size:0.84rem; color:var(--text-secondary); line-height:1.5;">
+        The requested constraint configuration cannot be satisfied.
+      </div>
+      <div style="display:flex; justify-content:flex-end; margin-top:18px;">
+        <button class="btn btn-primary btn-sm" id="btnErrorModalOk">Acknowledge & Adjust</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Alert -->
+  <div class="alert-toast" id="alertToast"></div>
+
+  <!-- Leaflet Map JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <!-- Main Application Script -->
+  <script src="/app.js"></script>
+</body>
+</html>

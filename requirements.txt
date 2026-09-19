@@ -1,0 +1,10 @@
+fastapi>=0.110.0
+uvicorn>=0.29.0
+python-multipart>=0.0.9
+httpx>=0.27.0
+pandas>=2.0.0
+numpy>=1.24.0
+pulp[cbc]>=2.8.0
+ortools>=9.8.0
+requests>=2.31.0
+pytest>=8.0.0
