@@ -8,30 +8,34 @@ import json
 import logging
 from typing import Dict, List, Optional, Any, Tuple
 import pandas as pd
-from anthropic import Anthropic
 from api.schemas import AgentExtractRequest, AgentExtractResponse, ExtractedParams, AgentMessage
 from core.validation import validate_neighborhood_dataframe
 
 logger = logging.getLogger(__name__)
 
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 
-def get_anthropic_client() -> Optional[Anthropic]:
-    """Returns an authenticated Anthropic client if ANTHROPIC_API_KEY is configured in the environment."""
+
+def get_anthropic_client() -> Optional[Any]:
+    """Returns an authenticated Anthropic client if ANTHROPIC_API_KEY is configured and SDK is installed."""
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not api_key or api_key.startswith("your_") or api_key == "placeholder":
         return None
     try:
+        from anthropic import Anthropic
         return Anthropic(api_key=api_key)
+    except ImportError:
+        logger.warning("Anthropic SDK ('anthropic') is not installed in the active Python environment.")
+        return None
     except Exception as e:
         logger.error("Failed to initialize Anthropic client: %s", e)
         return None
 
 
 def get_gemini_client() -> Optional[Any]:
-    """Returns an authenticated Google GenAI client if GEMINI_API_KEY is configured in the environment."""
+    """Returns an authenticated Google GenAI client if GEMINI_API_KEY is configured and SDK is installed."""
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY", "")
     gemini_key = gemini_key.strip()
     if not gemini_key or gemini_key.startswith("your_") or gemini_key == "placeholder":
@@ -39,6 +43,9 @@ def get_gemini_client() -> Optional[Any]:
     try:
         from google import genai
         return genai.Client(api_key=gemini_key)
+    except ImportError:
+        logger.warning("Google GenAI SDK ('google-genai') is not installed in the active Python environment.")
+        return None
     except Exception as e:
         logger.error("Failed to initialize Google GenAI client: %s", e)
         return None
@@ -192,7 +199,16 @@ def process_agent_dialog(req: AgentExtractRequest) -> AgentExtractResponse:
                     break
         except Exception as e:
             logger.error("Anthropic API call failed in agent extract: %s", e)
-            raise RuntimeError(f"Anthropic API call failed: {str(e)}")
+            return AgentExtractResponse(
+                status="error",
+                reply=f"AI features temporarily unavailable: {str(e)}. Please check your API key configuration.",
+                extracted_params=ExtractedParams(),
+                missing_required=["api_key"],
+                ready_to_optimize=False,
+                defaults_applied=[],
+                warnings=[str(e)],
+                suggested_prompts=[],
+            )
 
     elif provider == "gemini":
         try:
@@ -218,10 +234,29 @@ def process_agent_dialog(req: AgentExtractRequest) -> AgentExtractResponse:
             tool_input = json.loads(response.text)
         except Exception as e:
             logger.error("Google Gemini API call failed in agent extract: %s", e)
-            raise RuntimeError(f"Google Gemini API call failed: {str(e)}")
+            return AgentExtractResponse(
+                status="error",
+                reply=f"AI features temporarily unavailable: {str(e)}. Please check your API key configuration.",
+                extracted_params=ExtractedParams(),
+                missing_required=["api_key"],
+                ready_to_optimize=False,
+                defaults_applied=[],
+                warnings=[str(e)],
+                suggested_prompts=[],
+            )
 
     if not tool_input:
-        raise RuntimeError("Model did not return structured parameters.")
+        return AgentExtractResponse(
+            status="error",
+            reply="Model did not return structured parameters. Please try rephrasing your request.",
+            extracted_params=ExtractedParams(),
+            missing_required=[],
+            ready_to_optimize=False,
+            defaults_applied=[],
+            warnings=[],
+            suggested_prompts=[],
+        )
+
 
     extracted = ExtractedParams(
         warehouse_count=tool_input.get("warehouse_count"),
@@ -509,7 +544,13 @@ def process_agent_explanation(
                     break
         except Exception as e:
             logger.error("Anthropic API call failed in agent explain: %s", e)
-            raise RuntimeError(f"Anthropic API call failed: {str(e)}")
+            return {
+                "reply": f"AI features temporarily unavailable: {str(e)}. Please check your API key configuration.",
+                "page": page,
+                "grounded": False,
+                "grounded_facts": [],
+                "suggested_followups": [],
+            }
 
     elif provider == "gemini":
         try:
@@ -533,10 +574,23 @@ def process_agent_explanation(
             tool_input = json.loads(response.text)
         except Exception as e:
             logger.error("Google Gemini API call failed in agent explain: %s", e)
-            raise RuntimeError(f"Google Gemini API call failed: {str(e)}")
+            return {
+                "reply": f"AI features temporarily unavailable: {str(e)}. Please check your API key configuration.",
+                "page": page,
+                "grounded": False,
+                "grounded_facts": [],
+                "suggested_followups": [],
+            }
 
     if not tool_input:
-        raise RuntimeError("Model did not return structured explanation.")
+        return {
+            "reply": "AI explanation unavailable. Please try rephrasing your question.",
+            "page": page,
+            "grounded": False,
+            "grounded_facts": [],
+            "suggested_followups": [],
+        }
+
 
     return {
         "reply": tool_input.get("reply", ""),

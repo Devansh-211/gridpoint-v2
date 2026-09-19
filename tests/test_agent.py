@@ -16,9 +16,15 @@ client = TestClient(app)
 # 1. MISSING API KEY BEHAVIOR (FAIL LOUDLY & SPECIFICALLY FOR AI ONLY)
 # ============================================================================
 
-def test_agent_extract_missing_api_key_shows_unavailable_state(monkeypatch):
-    """When ANTHROPIC_API_KEY is not configured, the extract route must return an honest unavailable status."""
+def _clear_all_ai_keys(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+
+def test_agent_extract_missing_api_key_shows_unavailable_state(monkeypatch):
+    """When no LLM API key is configured, the extract route must return an honest unavailable status."""
+    _clear_all_ai_keys(monkeypatch)
     
     payload = {
         "message": "Plan a 3-warehouse network with 4000 orders/day capacity within 25 km radius.",
@@ -35,8 +41,8 @@ def test_agent_extract_missing_api_key_shows_unavailable_state(monkeypatch):
 
 
 def test_agent_explain_missing_api_key_shows_unavailable_state(monkeypatch):
-    """When ANTHROPIC_API_KEY is not configured, explain mode returns an honest unavailable notice."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    """When no LLM API key is configured, explain mode returns an honest unavailable notice."""
+    _clear_all_ai_keys(monkeypatch)
 
     payload = {
         "page": "viewResults",
@@ -52,8 +58,8 @@ def test_agent_explain_missing_api_key_shows_unavailable_state(monkeypatch):
 
 
 def test_agent_synthetic_missing_api_key_returns_503(monkeypatch):
-    """When ANTHROPIC_API_KEY is missing, synthetic data generation returns 503 unavailable."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    """When no LLM API key is configured, synthetic data generation returns 503 unavailable."""
+    _clear_all_ai_keys(monkeypatch)
 
     payload = {
         "zone_count": 30,
@@ -63,12 +69,12 @@ def test_agent_synthetic_missing_api_key_returns_503(monkeypatch):
     res = client.post("/api/agent/generate-synthetic-data", json=payload)
     assert res.status_code == 503
     data = res.json()
-    assert "ANTHROPIC_API_KEY" in str(data["detail"]) or "unavailable" in str(data["detail"]).lower()
+    assert "API_KEY" in str(data["detail"]) or "unavailable" in str(data["detail"]).lower()
 
 
 def test_core_app_unaffected_when_api_key_is_missing(monkeypatch):
-    """Confirm solver, demo data, and metrics operate with ZERO degradation when ANTHROPIC_API_KEY is absent."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    """Confirm solver, demo data, and metrics operate with ZERO degradation when no AI API keys are present."""
+    _clear_all_ai_keys(monkeypatch)
 
     # 1. Health check works
     health_res = client.get("/api/health")
@@ -385,4 +391,63 @@ def test_agent_explain_with_mocked_gemini():
         data = res.json()
         assert data["grounded"] is True
         assert "optimize demand-weighted" in data["reply"]
+
+
+# ============================================================================
+# 3. MISSING SDK / IMPORTERROR HANDLING (FAIL RESILIENTLY WITHOUT CRASHING)
+# ============================================================================
+
+def test_missing_sdk_import_returns_none_gracefully(monkeypatch):
+    """Verify get_anthropic_client and get_gemini_client return None when SDK is not installed."""
+    from api.agent import get_anthropic_client, get_gemini_client, get_llm_provider
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key-123456789")
+    monkeypatch.setenv("GEMINI_API_KEY", "AIzaSyTestKey123456789")
+
+    # Simulate anthropic and google.genai not being installed
+    with patch.dict("sys.modules", {"anthropic": None, "google.genai": None, "google": None}):
+        client_a = get_anthropic_client()
+        assert client_a is None
+
+        client_g = get_gemini_client()
+        assert client_g is None
+
+        provider, client_instance = get_llm_provider()
+        assert provider is None
+        assert client_instance is None
+
+
+def test_app_and_non_ai_routes_work_when_ai_sdks_missing(monkeypatch):
+    """Verify that when AI SDKs raise ImportError, core CFLP/CVRP/map/CSV routes operate normally."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-key-123456789")
+
+    with patch("api.agent.get_anthropic_client", return_value=None), \
+         patch("api.agent.get_gemini_client", return_value=None):
+
+        # Core optimization works
+        opt_res = client.post("/api/optimize", json={
+            "session_id": "default",
+            "p": 3,
+            "warehouse_capacity": 4000,
+            "radius_max_km": 30.0,
+            "cost_per_km": 1.25,
+            "fixed_cost_per_warehouse": 300.0,
+            "routing_mode": "haversine",
+            "priority_preset": "cost",
+            "include_cvrp": False,
+        })
+        assert opt_res.status_code == 200
+        assert opt_res.json()["is_optimal"] is True or opt_res.json()["status"].startswith("Feasible") or opt_res.json()["status"] == "Optimal"
+
+        # AI route returns honest unavailable response
+        extract_res = client.post("/api/agent/extract", json={
+            "message": "Optimize 2 warehouses",
+            "history": [],
+            "known_params": {}
+        })
+        assert extract_res.status_code == 200
+        extract_data = extract_res.json()
+        assert extract_data["status"] == "error"
+        assert "api key" in extract_data["reply"].lower() or "ai features unavailable" in extract_data["reply"].lower()
+
 
