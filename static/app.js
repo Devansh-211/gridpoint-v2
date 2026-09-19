@@ -63,6 +63,296 @@ const VIEW_METADATA = {
 };
 
 // ============================================================================
+// CONVERSATIONAL LOGISTICS AGENT STATE & UTILITIES (PHASE 2)
+// ============================================================================
+
+const agentState = {
+  history: [],
+  knownParams: {
+    warehouse_count: 3,
+    warehouse_capacity: 4000,
+    max_service_radius_km: 25.0,
+    cost_per_km: 1.5,
+    fixed_cost_per_warehouse: 50000.0,
+    priority_preset: "cost",
+    include_cvrp: false,
+    vehicle_capacity: 150,
+    vehicle_fixed_cost: 500.0,
+  },
+  isProcessing: false,
+};
+
+function syncUiToAgentParams() {
+  const pVal = parseInt(document.getElementById("inputConfigP")?.value) || 3;
+  const capVal = parseInt(document.getElementById("inputConfigCap")?.value) || 4000;
+  const radVal = parseFloat(document.getElementById("inputConfigRadius")?.value) || 25.0;
+  const cvrpVal = document.getElementById("chkIncludeCvrp")?.checked || false;
+  const preset = appState.priorityPreset || "cost";
+  agentState.knownParams = {
+    ...agentState.knownParams,
+    warehouse_count: pVal,
+    warehouse_capacity: capVal,
+    max_service_radius_km: radVal,
+    include_cvrp: cvrpVal,
+    priority_preset: preset,
+  };
+}
+
+function applyAgentParamsToUi(params) {
+  if (!params) return;
+  if (params.warehouse_count !== undefined && params.warehouse_count !== null) {
+    const el = document.getElementById("inputConfigP");
+    if (el) el.value = params.warehouse_count;
+    const valEl = document.getElementById("valConfigP");
+    if (valEl) valEl.textContent = `${params.warehouse_count} sites`;
+  }
+  if (params.warehouse_capacity !== undefined && params.warehouse_capacity !== null) {
+    const el = document.getElementById("inputConfigCap");
+    if (el) el.value = params.warehouse_capacity;
+    const valEl = document.getElementById("valConfigCap");
+    if (valEl) valEl.textContent = `${Number(params.warehouse_capacity).toLocaleString()} orders/day`;
+  }
+  if (params.max_service_radius_km !== undefined && params.max_service_radius_km !== null) {
+    const el = document.getElementById("inputConfigRadius");
+    if (el) el.value = params.max_service_radius_km;
+    const valEl = document.getElementById("valConfigRadius");
+    if (valEl) valEl.textContent = `${params.max_service_radius_km} km`;
+  }
+  if (params.include_cvrp !== undefined && params.include_cvrp !== null) {
+    const el1 = document.getElementById("chkIncludeCvrp");
+    if (el1) el1.checked = !!params.include_cvrp;
+    const el2 = document.getElementById("chkFleetEnableCvrp");
+    if (el2) el2.checked = !!params.include_cvrp;
+  }
+  if (params.priority_preset) {
+    appState.priorityPreset = params.priority_preset;
+    document.querySelectorAll(".gp-preset-pill").forEach(pill => {
+      if (pill.getAttribute("data-preset") === params.priority_preset) {
+        pill.classList.add("active");
+      } else {
+        pill.classList.remove("active");
+      }
+    });
+  }
+  updateLiveSummary();
+  updateDashboardStats();
+  agentState.knownParams = { ...agentState.knownParams, ...params };
+}
+
+function toggleAgentDrawer(open) {
+  const drawer = document.getElementById("agentDrawer");
+  const backdrop = document.getElementById("agentDrawerBackdrop");
+  if (!drawer || !backdrop) return;
+  if (open) {
+    syncUiToAgentParams();
+    drawer.classList.add("active");
+    backdrop.classList.add("active");
+    setTimeout(() => document.getElementById("agentInput")?.focus(), 150);
+  } else {
+    drawer.classList.remove("active");
+    backdrop.classList.remove("active");
+  }
+}
+
+function updateAgentFabVisibility(viewId) {
+  const fab = document.getElementById("btnOpenAgentDrawer");
+  if (!fab) return;
+  if (viewId === "viewDashboard" || viewId === "viewConfig") {
+    fab.classList.add("visible");
+  } else {
+    fab.classList.remove("visible");
+  }
+}
+
+function appendAgentMessage(text, role = "agent") {
+  const body = document.getElementById("agentChatBody");
+  if (!body) return;
+  const bubble = document.createElement("div");
+  bubble.className = `gp-bubble ${role === "user" ? "gp-bubble-user" : "gp-bubble-agent"}`;
+  bubble.textContent = text;
+  body.appendChild(bubble);
+  body.scrollTop = body.scrollHeight;
+}
+
+function showThinkingPulse() {
+  const body = document.getElementById("agentChatBody");
+  if (!body) return;
+  removeThinkingPulse();
+  const pulse = document.createElement("div");
+  pulse.id = "agentThinkingPulse";
+  pulse.className = "gp-thinking-pulse";
+  pulse.innerHTML = `
+    <div class="gp-thinking-dot"></div>
+    <div class="gp-thinking-dot"></div>
+    <div class="gp-thinking-dot"></div>
+  `;
+  body.appendChild(pulse);
+  body.scrollTop = body.scrollHeight;
+}
+
+function removeThinkingPulse() {
+  const p = document.getElementById("agentThinkingPulse");
+  if (p) p.remove();
+}
+
+function renderSuggestedPrompts(prompts) {
+  const body = document.getElementById("agentChatBody");
+  if (!body || !prompts || prompts.length === 0) return;
+  const container = document.createElement("div");
+  container.className = "gp-quick-prompts";
+  container.innerHTML = '<div class="gp-quick-prompts-label">Suggested Replies:</div>';
+  prompts.forEach(p => {
+    const chip = document.createElement("button");
+    chip.className = "gp-quick-chip";
+    chip.textContent = `• ${p}`;
+    chip.addEventListener("click", () => sendAgentMessage(p));
+    container.appendChild(chip);
+  });
+  body.appendChild(container);
+  body.scrollTop = body.scrollHeight;
+}
+
+function renderConfirmationCard(data) {
+  const body = document.getElementById("agentChatBody");
+  if (!body || !data.confirmation_card) return;
+  const cardData = data.confirmation_card;
+  const p = cardData.params || {};
+
+  const card = document.createElement("div");
+  card.className = "gp-confirm-card";
+  
+  let notesHtml = "";
+  if (cardData.defaults_applied && cardData.defaults_applied.length > 0) {
+    notesHtml += `<div class="gp-confirm-notes"><strong>Defaults applied:</strong> ${cardData.defaults_applied.join("; ")}</div>`;
+  }
+  if (cardData.warnings && cardData.warnings.length > 0) {
+    notesHtml += `<div class="gp-confirm-notes" style="border-left-color:var(--gp-warning); margin-top:4px;"><strong>Note:</strong> ${cardData.warnings.join("; ")}</div>`;
+  }
+
+  card.innerHTML = `
+    <div class="gp-confirm-title">
+      <span>Proposed Configuration</span>
+      <span class="gp-badge gp-badge-estimate" style="font-size:10px;">[Ready to Solve]</span>
+    </div>
+    <div class="gp-confirm-grid">
+      <div class="gp-confirm-field">
+        <span class="gp-confirm-label">Warehouses (p)</span>
+        <input type="number" min="1" max="5" class="gp-confirm-val" id="cfgEditP" value="${p.warehouse_count ?? 3}">
+      </div>
+      <div class="gp-confirm-field">
+        <span class="gp-confirm-label">Capacity (orders/day)</span>
+        <input type="number" step="500" class="gp-confirm-val" id="cfgEditCap" value="${p.warehouse_capacity ?? 4000}">
+      </div>
+      <div class="gp-confirm-field">
+        <span class="gp-confirm-label">Max Radius (km)</span>
+        <input type="number" step="1" class="gp-confirm-val" id="cfgEditRadius" value="${p.max_service_radius_km ?? 25}">
+      </div>
+      <div class="gp-confirm-field">
+        <span class="gp-confirm-label">Priority Preset</span>
+        <select class="gp-confirm-val" id="cfgEditPreset" style="font-size:11px; cursor:pointer;">
+          <option value="cost" ${p.priority_preset === 'cost' ? 'selected' : ''}>Cost Focus</option>
+          <option value="speed" ${p.priority_preset === 'speed' ? 'selected' : ''}>Speed Focus</option>
+          <option value="sustainability" ${p.priority_preset === 'sustainability' ? 'selected' : ''}>Sustainability</option>
+        </select>
+      </div>
+    </div>
+    ${notesHtml}
+    <div class="gp-confirm-actions">
+      <button class="gp-btn gp-btn-primary gp-btn-sm" id="btnConfirmRunOpt" style="flex:1;">
+        Run Optimization
+      </button>
+      <button class="gp-btn gp-btn-secondary gp-btn-sm" id="btnConfirmKeepTalking">
+        Keep Talking
+      </button>
+    </div>
+  `;
+
+  body.appendChild(card);
+  body.scrollTop = body.scrollHeight;
+
+  const btnRun = card.querySelector("#btnConfirmRunOpt");
+  const btnKeep = card.querySelector("#btnConfirmKeepTalking");
+
+  btnRun.addEventListener("click", async () => {
+    btnRun.disabled = true;
+    btnRun.textContent = "Applying & Solving...";
+    
+    const finalParams = {
+      ...p,
+      warehouse_count: parseInt(card.querySelector("#cfgEditP").value) || p.warehouse_count || 3,
+      warehouse_capacity: parseInt(card.querySelector("#cfgEditCap").value) || p.warehouse_capacity || 4000,
+      max_service_radius_km: parseFloat(card.querySelector("#cfgEditRadius").value) || p.max_service_radius_km || 25.0,
+      priority_preset: card.querySelector("#cfgEditPreset").value || p.priority_preset || "cost",
+    };
+
+    applyAgentParamsToUi(finalParams);
+    toggleAgentDrawer(false);
+    showToast("Optimization triggered from Logistics Agent.");
+    await runOptimization();
+    switchView("viewResults");
+  });
+
+  btnKeep.addEventListener("click", () => {
+    document.getElementById("agentInput")?.focus();
+  });
+}
+
+async function sendAgentMessage(userText) {
+  if (!userText || !userText.trim() || agentState.isProcessing) return;
+  const text = userText.trim();
+  
+  const inputEl = document.getElementById("agentInput");
+  if (inputEl) inputEl.value = "";
+
+  appendAgentMessage(text, "user");
+  agentState.history.push({ role: "user", content: text });
+
+  showThinkingPulse();
+  agentState.isProcessing = true;
+
+  try {
+    syncUiToAgentParams();
+    const res = await fetch("/api/agent/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: text,
+        history: agentState.history.slice(-10),
+        known_params: agentState.knownParams,
+      }),
+    });
+
+    const data = await res.json();
+    removeThinkingPulse();
+    agentState.isProcessing = false;
+
+    if (!res.ok) {
+      appendAgentMessage(`Error processing request: ${data.detail || "Server error"}`, "agent");
+      return;
+    }
+
+    agentState.history.push({ role: "assistant", content: data.reply });
+    appendAgentMessage(data.reply, "agent");
+
+    if (data.extracted_params) {
+      agentState.knownParams = { ...agentState.knownParams, ...data.extracted_params };
+    }
+
+    if (data.status === "confirm" && data.confirmation_card) {
+      renderConfirmationCard(data);
+    }
+
+    if (data.suggested_prompts && data.suggested_prompts.length > 0) {
+      renderSuggestedPrompts(data.suggested_prompts);
+    }
+  } catch (err) {
+    removeThinkingPulse();
+    agentState.isProcessing = false;
+    appendAgentMessage(`Connection error: ${err.message}`, "agent");
+  }
+}
+
+// ============================================================================
 // 1. TOAST NOTIFICATIONS & INFEASIBILITY MODAL
 // ============================================================================
 
@@ -121,7 +411,10 @@ function switchView(viewId) {
   document.getElementById("headerBreadcrumb").textContent = meta.breadcrumb;
   document.getElementById("headerScreenTitle").textContent = meta.title;
 
-  // 4. Invalidate Map Sizes on View Switch (prevents Leaflet tile render glitches)
+  // 4. Update Agent FAB Visibility (Visible only on Dashboard and Network Configuration)
+  updateAgentFabVisibility(viewId);
+
+  // 5. Invalidate Map Sizes on View Switch (prevents Leaflet tile render glitches)
   setTimeout(() => {
     if (viewId === "viewResults" && appState.maps.results) {
       appState.maps.results.invalidateSize();
@@ -1129,18 +1422,21 @@ function setupEventListeners() {
     document.getElementById("valConfigP").textContent = `${e.target.value} sites`;
     updateLiveSummary();
     updateDashboardStats();
+    agentState.knownParams.warehouse_count = parseInt(e.target.value) || 3;
   });
 
   const inputCap = document.getElementById("inputConfigCap");
   inputCap.addEventListener("input", (e) => {
     document.getElementById("valConfigCap").textContent = `${Number(e.target.value).toLocaleString()} orders/day`;
     updateLiveSummary();
+    agentState.knownParams.warehouse_capacity = parseInt(e.target.value) || 4000;
   });
 
   const inputRad = document.getElementById("inputConfigRadius");
   inputRad.addEventListener("input", (e) => {
     document.getElementById("valConfigRadius").textContent = e.target.value ? `${e.target.value} km` : "No Limit";
     updateLiveSummary();
+    agentState.knownParams.max_service_radius_km = parseFloat(e.target.value) || 25.0;
   });
 
   // Priority Presets
@@ -1149,12 +1445,53 @@ function setupEventListeners() {
       document.querySelectorAll(".gp-preset-pill").forEach(p => p.classList.remove("active"));
       pill.classList.add("active");
       appState.priorityPreset = pill.getAttribute("data-preset");
+      agentState.knownParams.priority_preset = appState.priorityPreset;
     });
   });
 
   document.getElementById("btnConfigRunOptimization").addEventListener("click", async () => {
     await runOptimization();
     switchView("viewResults");
+  });
+
+  // 7.5 Conversational Logistics Agent Controls (Phase 2)
+  const btnOpenAgent = document.getElementById("btnOpenAgentDrawer");
+  if (btnOpenAgent) {
+    btnOpenAgent.addEventListener("click", () => toggleAgentDrawer(true));
+  }
+
+  const btnCloseAgent = document.getElementById("btnCloseAgentDrawer");
+  if (btnCloseAgent) {
+    btnCloseAgent.addEventListener("click", () => toggleAgentDrawer(false));
+  }
+
+  const backdropAgent = document.getElementById("agentDrawerBackdrop");
+  if (backdropAgent) {
+    backdropAgent.addEventListener("click", () => toggleAgentDrawer(false));
+  }
+
+  const btnSendAgent = document.getElementById("btnAgentSend");
+  const inputAgent = document.getElementById("agentInput");
+
+  if (btnSendAgent && inputAgent) {
+    btnSendAgent.addEventListener("click", () => {
+      sendAgentMessage(inputAgent.value);
+    });
+
+    inputAgent.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        sendAgentMessage(inputAgent.value);
+      }
+    });
+  }
+
+  // Quick Chips in Initial Agent State
+  document.querySelectorAll("#agentQuickPrompts .gp-quick-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      const promptText = chip.getAttribute("data-prompt");
+      if (promptText) sendAgentMessage(promptText);
+    });
   });
 
   // 8. Results View Subtabs

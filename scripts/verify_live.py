@@ -51,7 +51,33 @@ def run_verification():
     scen_data = r_scen.json()
     print(f"[PASS] Scenario Lab (+50% Surge): Cost shift {scen_data['cost_pct_change']}%, Active Warehouses: {scen_data['scenario_warehouses']}")
 
-    print("\nALL 10 LIVE SYSTEM CHECKS PASSED WITH 100% SUCCESS!")
+    # Test conversational agent extract (Clarification)
+    r_agent_clarify = requests.post(f'{base}/api/agent/extract', json={
+        'message': 'We want 3 warehouses and 25 km radius',
+        'history': [],
+        'known_params': {}
+    })
+    assert r_agent_clarify.status_code == 200, f"Agent clarify failed: {r_agent_clarify.text}"
+    clarify_data = r_agent_clarify.json()
+    assert clarify_data['status'] == 'clarify'
+    print(f"[PASS] Agent Extraction (Clarification): status={clarify_data['status']}, missing={clarify_data.get('missing_required_params')}, reply='{clarify_data['reply'][:60]}...'")
+
+    # Test conversational agent extract (Confirmation)
+    r_agent_confirm = requests.post(f'{base}/api/agent/extract', json={
+        'message': 'Set up 3 warehouses with 4000 orders/day capacity within 25 km, cost priority',
+        'history': [],
+        'known_params': {}
+    })
+    assert r_agent_confirm.status_code == 200, f"Agent confirm failed: {r_agent_confirm.text}"
+    confirm_data = r_agent_confirm.json()
+    assert confirm_data['status'] == 'confirm'
+    assert confirm_data['extracted_params']['warehouse_count'] == 3
+    assert confirm_data['extracted_params']['warehouse_capacity'] == 4000.0
+    assert confirm_data['extracted_params']['max_service_radius_km'] == 25.0
+    print(f"[PASS] Agent Extraction (Confirmation): status={confirm_data['status']}, p={confirm_data['extracted_params']['warehouse_count']}, cap={confirm_data['extracted_params']['warehouse_capacity']}, radius={confirm_data['extracted_params']['max_service_radius_km']}")
+
+    print("\nALL 12 LIVE SYSTEM CHECKS PASSED WITH 100% SUCCESS!")
 
 if __name__ == '__main__':
     run_verification()
+

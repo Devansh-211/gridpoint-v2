@@ -36,7 +36,10 @@ from api.schemas import (
     ExplainResponse,
     DemandDriver,
     NextBestCandidate,
+    AgentExtractRequest,
+    AgentExtractResponse,
 )
+from api.agent import process_agent_dialog
 
 logger = logging.getLogger(__name__)
 
@@ -809,3 +812,18 @@ def explain_warehouse_selection(warehouse_id: str, session_id: str = "default"):
         key_demand_drivers=demand_drivers,
         next_best_rejected=next_best,
     )
+
+
+# 8. Conversational Optimization Agent
+@router.post("/agent/extract", response_model=AgentExtractResponse)
+def extract_agent_parameters(req: AgentExtractRequest):
+    """Extracts, clarifies, and validates structured CFLP/CVRP parameters from natural language instructions."""
+    try:
+        return process_agent_dialog(req)
+    except Exception as e:
+        logger.error("Error in conversational agent extraction: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Agent parameter extraction failed: {str(e)}",
+        )
+

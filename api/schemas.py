@@ -195,3 +195,36 @@ class ExplainResponse(BaseModel):
     burden_eliminated_km: float = 0.0
     key_demand_drivers: List[DemandDriver] = []
     next_best_rejected: Optional[NextBestCandidate] = None
+
+
+# 7. Conversational Agent models
+class AgentMessage(BaseModel):
+    role: str = Field(description="'user' or 'assistant'")
+    content: str
+
+
+class ExtractedParams(BaseModel):
+    warehouse_count: Optional[int] = Field(default=None, description="Number of warehouses p (1-5)")
+    warehouse_capacity: Optional[float] = Field(default=None, description="Throughput capacity (orders/day)")
+    max_service_radius_km: Optional[float] = Field(default=None, description="Geographic service radius in km")
+    cost_per_km: Optional[float] = Field(default=1.25, description="Cost per km in dollars")
+    fixed_cost_per_warehouse: Optional[float] = Field(default=300.0, description="Daily facility lease cost")
+    priority_preset: Optional[str] = Field(default="cost", description="'cost', 'speed', or 'sustainability'")
+    include_cvrp: Optional[bool] = Field(default=False, description="Enable tactical vehicle tour optimization")
+    vehicle_capacity: Optional[int] = Field(default=250, description="Payload capacity per vehicle")
+    vehicle_fixed_cost: Optional[float] = Field(default=150.0, description="Fixed cost per vehicle")
+
+
+class AgentExtractRequest(BaseModel):
+    message: str
+    history: List[AgentMessage] = []
+    known_params: Optional[Dict[str, Any]] = None
+
+
+class AgentExtractResponse(BaseModel):
+    status: str = Field(description="'clarify', 'confirm', or 'error'")
+    reply: str
+    extracted_params: ExtractedParams
+    missing_required: List[str] = []
+    ready_to_optimize: bool = False
+
