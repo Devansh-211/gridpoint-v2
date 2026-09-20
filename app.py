@@ -26,21 +26,12 @@ async def lifespan(app: FastAPI):
     logger.info("⚡ Initializing GRIDPOINT platform...")
     try:
         solver = get_milp_solver()
-        if not solver.available():
-            raise SolverUnavailableError("Solver binary could not be verified.")
-        logger.info(f"✅ CBC MILP solver detected and active: {type(solver).__name__}")
+        if solver.available():
+            logger.info(f"✅ CBC MILP solver detected and active: {type(solver).__name__}")
+        else:
+            logger.warning("⚠️ CBC binary not detected on PATH; CFLP will use greedy + 2-opt local search heuristic fallback.")
     except Exception as exc:
-        msg = (
-            "\n" + "=" * 70 + "\n"
-            "🚨 CRITICAL ERROR: CBC MILP Solver Not Available!\n"
-            f"Details: {exc}\n"
-            "Please install the CBC solver package:\n"
-            "    pip install \"pulp[cbc]\"\n"
-            "or ensure the 'cbc' executable is present on your system PATH.\n"
-            + "=" * 70 + "\n"
-        )
-        logger.error(msg)
-        raise RuntimeError(msg) from exc
+        logger.warning(f"⚠️ Solver detection notice ({exc}); CFLP will use greedy + 2-opt heuristic fallback.")
 
     # Load cities geodata once into memory at backend startup
     try:
@@ -56,7 +47,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="GRIDPOINT — Warehouse Location Optimization Platform",
-    description="Operations-research B2B platform coupling Strategic CFLP (PuLP/CBC) and Tactical CVRP (Google OR-Tools).",
+    description="Operations-research B2B platform coupling Strategic CFLP and Tactical CVRP.",
     version="2.0.0",
     lifespan=lifespan,
 )
@@ -74,7 +65,9 @@ app.add_middleware(
 app.include_router(api_router)
 
 # Mount static files at root
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+if os.path.exists(static_dir):
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
 
 
 if __name__ == "__main__":

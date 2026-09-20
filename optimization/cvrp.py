@@ -4,7 +4,14 @@
 import math
 import logging
 from typing import List, Dict, Tuple, Optional
-from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+try:
+    from ortools.constraint_solver import pywrapcp, routing_enums_pb2
+    ORTOOLS_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    pywrapcp = None
+    routing_enums_pb2 = None
+    ORTOOLS_AVAILABLE = False
+
 from core.models import Neighborhood, WarehouseCandidate, VehicleRoute, CVRPWarehouseResult
 from routing.matrix import NetworkMatrix
 from routing.osrm import OSRMClient
@@ -89,51 +96,61 @@ def solve_cvrp_for_warehouse(
                 dist_sub[i][j] = d
                 dur_sub[i][j] = t
 
-    # 4. OR-Tools Routing Index Manager & Model
-    manager = pywrapcp.RoutingIndexManager(num_nodes, num_vehicles, 0)
-    routing = pywrapcp.RoutingModel(manager)
+    # 4. Check if OR-Tools solver is available; if not, use pure-Python greedy heuristic
+    if not ORTOOLS_AVAILABLE:
+        logger.info(
+            f"OR-Tools not available in environment. Using greedy dispatch heuristic for warehouse {warehouse.id}."
+        )
+        active_routes, total_km, total_hours = _fallback_greedy_cvrp(
+            warehouse, assigned_neighborhoods, dist_sub, dur_sub, node_parent_ids, node_names, node_demands, node_coords, vehicle_capacity
+        )
+        solution = None
+    else:
+        # OR-Tools Routing Index Manager & Model
+        manager = pywrapcp.RoutingIndexManager(num_nodes, num_vehicles, 0)
+        routing = pywrapcp.RoutingModel(manager)
 
-    # Distance Transit Callback (scaled to integer meters)
-    def distance_callback(from_index: int, to_index: int) -> int:
-        from_node = manager.IndexToNode(from_index)
-        to_node = manager.IndexToNode(to_index)
-        return int(dist_sub[from_node][to_node] * 1000)
+        # Distance Transit Callback (scaled to integer meters)
+        def distance_callback(from_index: int, to_index: int) -> int:
+            from_node = manager.IndexToNode(from_index)
+            to_node = manager.IndexToNode(to_index)
+            return int(dist_sub[from_node][to_node] * 1000)
 
-    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
-    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-    routing.SetFixedCostOfAllVehicles(50000)
+        transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+        routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+        routing.SetFixedCostOfAllVehicles(50000)
 
-    # Capacity Dimension
-    def demand_callback(from_index: int) -> int:
-        from_node = manager.IndexToNode(from_index)
-        return int(node_demands[from_node])
+        # Capacity Dimension
+        def demand_callback(from_index: int) -> int:
+            from_node = manager.IndexToNode(from_index)
+            return int(node_demands[from_node])
 
-    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
-    routing.AddDimensionWithVehicleCapacity(
-        demand_callback_index,
-        0,  # null capacity slack
-        [int(vehicle_capacity)] * num_vehicles,
-        True,  # start cumul to zero
-        "Capacity",
-    )
+        demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+        routing.AddDimensionWithVehicleCapacity(
+            demand_callback_index,
+            0,  # null capacity slack
+            [int(vehicle_capacity)] * num_vehicles,
+            True,  # start cumul to zero
+            "Capacity",
+        )
 
-    # 5. Search Parameters
-    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    search_parameters.first_solution_strategy = (
-        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    )
-    search_parameters.local_search_metaheuristic = (
-        routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    )
-    search_parameters.time_limit.FromSeconds(time_limit_seconds)
+        # 5. Search Parameters
+        search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+        search_parameters.first_solution_strategy = (
+            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+        )
+        search_parameters.local_search_metaheuristic = (
+            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+        )
+        search_parameters.time_limit.FromSeconds(time_limit_seconds)
 
-    # 6. Solve CVRP
-    solution = routing.SolveWithParameters(search_parameters)
+        # 6. Solve CVRP
+        solution = routing.SolveWithParameters(search_parameters)
 
-    # 7. Extract Active Routes
-    active_routes: List[VehicleRoute] = []
-    total_km = 0.0
-    total_hours = 0.0
+        # 7. Extract Active Routes
+        active_routes: List[VehicleRoute] = []
+        total_km = 0.0
+        total_hours = 0.0
 
     if solution:
         for vehicle_id in range(num_vehicles):
