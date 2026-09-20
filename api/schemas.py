@@ -26,6 +26,11 @@ class UploadResponse(BaseModel):
     preview: List[NeighborhoodItem]
     is_synthetic_ai: Optional[bool] = False
     dataset_type: Optional[str] = "demo"
+    badge_text: Optional[str] = None
+    scope: Optional[str] = None
+    seed: Optional[int] = None
+    data_source: Optional[str] = None
+    source_label: Optional[str] = None
 
 
 # 2. Optimization models
@@ -246,14 +251,18 @@ class AgentExtractResponse(BaseModel):
     confirmation_card: Optional[Dict[str, Any]] = None
 
 
-# 8. Synthetic Data Generation models (Phase 3)
+# 8. Synthetic Data Generation models (Phase 3: Real-Geodata Sampler)
 class SyntheticDataRequest(BaseModel):
+    prompt: Optional[str] = Field(default=None, description="Plain-language generation request parsed by LLM into parameters")
     zone_count: Optional[int] = Field(default=50, description="Requested number of delivery zones (10-150)")
-    pattern: Optional[str] = Field(default="clustered", description="'clustered', 'multi_hub', or 'corridor'")
+    scope: Optional[str] = Field(default=None, description="'state' or 'single_city'")
+    region_filter: Optional[Dict[str, Any]] = Field(default=None, description="Country/state/city filter")
+    pattern: Optional[str] = Field(default="clustered", description="'clustered' distribution")
     pattern_hint: Optional[str] = Field(default=None)
     region_name: Optional[str] = Field(default="Bengaluru Metro", description="City/region naming flavor")
     city_hint: Optional[str] = Field(default=None)
     session_id: Optional[str] = Field(default="default")
+    seed: Optional[int] = Field(default=None, description="Deterministic reproducibility seed")
 
 
 # 9. Grounded Explain Mode models (Phase 4)

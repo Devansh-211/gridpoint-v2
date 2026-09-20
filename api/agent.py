@@ -323,63 +323,76 @@ def process_agent_dialog(req: AgentExtractRequest) -> AgentExtractResponse:
 # 2. AI SYNTHETIC DATA GENERATION (PHASE 3)
 # ============================================================================
 
-SYNTHETIC_DATA_TOOL = {
-    "name": "output_synthetic_demand_dataset",
-    "description": "Output structured synthetic delivery zone records for logistics optimization.",
+# ============================================================================
+# 2. REAL-GEODATA SAMPLER & LLM REQUEST PARSER (REPLACING AI FABRICATION)
+# ============================================================================
+
+PARSE_GEODATA_REQUEST_TOOL = {
+    "name": "parse_geodata_sampler_parameters",
+    "description": "Parse the user's natural language request into structured generation parameters for the deterministic geodata sampler.",
     "input_schema": {
         "type": "object",
         "properties": {
-            "region_name": {"type": "string", "description": "Metropolitan region name"},
-            "zones": {
-                "type": "array",
-                "description": "List of delivery zone objects",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "neighborhood_id": {"type": "string", "description": "Unique zone identifier, e.g. SYN_01"},
-                        "name": {"type": "string", "description": "Realistic locality/neighborhood name"},
-                        "latitude": {"type": "number", "description": "Latitude coordinate within the metropolitan region"},
-                        "longitude": {"type": "number", "description": "Longitude coordinate within the metropolitan region"},
-                        "daily_orders": {"type": "number", "description": "Daily order demand volume (45.0 to 950.0)"},
-                        "capacity": {"type": ["number", "null"], "description": "Throughput capacity if candidate warehouse (3000-8000), or null"}
+            "zone_count": {
+                "type": "integer",
+                "description": "Number of delivery zones to generate (10 to 150, default 50)."
+            },
+            "scope": {
+                "type": "string",
+                "enum": ["state", "single_city"],
+                "description": "'state' if multi-city or statewide regional distribution; 'single_city' if zones/neighborhoods anchored to a single city."
+            },
+            "region_filter": {
+                "type": "object",
+                "properties": {
+                    "country_code": {
+                        "type": "string",
+                        "description": "ISO 2-letter country code (default 'IN')."
                     },
-                    "required": ["neighborhood_id", "name", "latitude", "longitude", "daily_orders"]
-                }
+                    "state_name": {
+                        "type": ["string", "null"],
+                        "description": "State name (e.g. 'Karnataka', 'Maharashtra'). Required if scope is 'state'."
+                    },
+                    "city_name": {
+                        "type": ["string", "null"],
+                        "description": "Anchor city name (e.g. 'Bengaluru', 'Mumbai', 'Delhi'). Required if scope is 'single_city'."
+                    }
+                },
+                "required": ["country_code"]
+            },
+            "demand_pattern": {
+                "type": "string",
+                "enum": ["clustered"],
+                "description": "Demand distribution pattern — must always be 'clustered'."
             }
         },
-        "required": ["region_name", "zones"]
+        "required": ["zone_count", "scope", "region_filter", "demand_pattern"]
     }
 }
 
 
-def generate_synthetic_demand_dataset(
-    zone_count: int = 50,
-    pattern: str = "clustered",
-    region_name: str = "Bengaluru",
-) -> Tuple[bool, List[str], Optional[Any]]:
-    """Generates a realistic, non-uniform, clustered synthetic demand dataset using Claude or Gemini.
-    Strictly validates output through core.validation.validate_neighborhood_dataframe.
+def parse_geodata_request_with_llm(prompt: str) -> Tuple[bool, List[str], Dict[str, Any]]:
+    """Uses LLM (Claude or Gemini) strictly to parse user's free-text request into generation parameters.
+    No coordinates, names, or numeric values are produced by the LLM.
     """
     provider, client = get_llm_provider()
     if not provider or not client:
-        return False, ["AI features unavailable — no ANTHROPIC_API_KEY or GEMINI_API_KEY configured in .env."], None
-
-    clamped_count = max(10, min(int(zone_count), 150))
+        return False, ["AI features unavailable — no ANTHROPIC_API_KEY or GEMINI_API_KEY configured in .env."], {}
 
     system_prompt = (
-        "You are a logistics data synthesis engine for GRIDPOINT.\n"
-        "You generate realistic, non-uniform clustered delivery zone datasets for supply chain network design.\n\n"
-        "Data Requirements:\n"
-        f"- Target Zone Count: {clamped_count} delivery zones.\n"
-        f"- Target Region: {region_name}.\n"
-        f"- Distribution Pattern: {pattern} (non-uniform demand with dense commercial centers and suburban zones).\n\n"
-        "Schema per Zone:\n"
-        "- neighborhood_id: 'SYN_01', 'SYN_02', ...\n"
-        "- name: Realistic locality name in the given city (e.g. Indiranagar, Whitefield, BKC, Connaught Place, etc.).\n"
-        "- latitude: Real geographic latitude inside the city boundary (e.g. 12.8-13.1 for Bengaluru, 18.9-19.3 for Mumbai, 28.4-28.8 for Delhi NCR).\n"
-        "- longitude: Real geographic longitude inside the city boundary (e.g. 77.5-77.8 for Bengaluru, 72.8-73.0 for Mumbai, 77.0-77.4 for Delhi NCR).\n"
-        "- daily_orders: Float demand between 45.0 and 950.0 orders/day (log-normal / Pareto skewed).\n"
-        "- capacity: Approximately 25-35% of zones should have warehouse capacity (e.g. 4000.0, 5000.0, 6000.0), others must be null."
+        "You are the Request Parameter Parser for GRIDPOINT's Real-Geodata Sampler.\n"
+        "Your ONLY role is to parse the user's plain-language request into a structured configuration object.\n\n"
+        "Rules:\n"
+        "1. scope: Choose 'state' if the user asks for a regional, multi-city, or statewide distribution "
+        "(e.g. 'across Karnataka', 'cities in Maharashtra'). Choose 'single_city' if the user asks for "
+        "neighborhoods or delivery zones within/around a single metropolitan area (e.g. 'around Bengaluru', 'in Mumbai').\n"
+        "2. region_filter:\n"
+        "   - country_code: Default to 'IN' unless another country is explicitly specified.\n"
+        "   - state_name: State name when scope is 'state' (e.g. 'Karnataka', 'Tamil Nadu', 'Maharashtra').\n"
+        "   - city_name: City name when scope is 'single_city' (e.g. 'Bengaluru', 'Mumbai', 'Delhi NCR').\n"
+        "3. zone_count: Integer between 10 and 150 (default 50).\n"
+        "4. demand_pattern: Always set to 'clustered' — uniform demand is never allowed under any circumstances.\n"
+        "Do NOT generate or invent coordinates, names, or demand values. Only output the parameter object."
     )
 
     tool_input = None
@@ -388,62 +401,114 @@ def generate_synthetic_demand_dataset(
         try:
             response = client.messages.create(
                 model=ANTHROPIC_MODEL,
-                max_tokens=4096,
+                max_tokens=1024,
                 system=system_prompt,
-                messages=[{
-                    "role": "user",
-                    "content": f"Generate a {pattern} delivery dataset for {region_name} with {clamped_count} zones."
-                }],
-                tools=[SYNTHETIC_DATA_TOOL],
-                tool_choice={"type": "tool", "name": "output_synthetic_demand_dataset"}
+                messages=[{"role": "user", "content": prompt}],
+                tools=[PARSE_GEODATA_REQUEST_TOOL],
+                tool_choice={"type": "tool", "name": "parse_geodata_sampler_parameters"}
             )
             for content in response.content:
-                if content.type == "tool_use" and content.name == "output_synthetic_demand_dataset":
+                if content.type == "tool_use" and content.name == "parse_geodata_sampler_parameters":
                     tool_input = content.input
                     break
         except Exception as e:
-            logger.error("Anthropic API call failed in synthetic data generation: %s", e)
-            return False, [f"Anthropic API call failed: {str(e)}"], None
+            logger.error("Anthropic API call failed in parse_geodata_request: %s", e)
+            return False, [f"Anthropic API call failed: {str(e)}"], {}
 
     elif provider == "gemini":
         try:
             from google.genai import types
-            prompt = (
+            g_prompt = (
                 f"{system_prompt}\n\n"
-                f"Generate {clamped_count} delivery zones for {region_name}.\n"
-                "Return a JSON object with: { region_name: string, zones: [ { neighborhood_id, name, latitude, longitude, daily_orders, capacity } ] }"
+                f"User Request: {prompt}\n\n"
+                "Return a JSON object with keys: "
+                "zone_count (int), scope ('state'|'single_city'), "
+                "region_filter (object with country_code, state_name, city_name), "
+                "demand_pattern ('clustered')."
             )
             response = client.models.generate_content(
                 model=GEMINI_MODEL,
-                contents=prompt,
+                contents=g_prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.2,
+                    temperature=0.1,
                 )
             )
             tool_input = json.loads(response.text)
         except Exception as e:
-            logger.error("Google Gemini API call failed in synthetic data generation: %s", e)
-            return False, [f"Google Gemini API call failed: {str(e)}"], None
+            logger.error("Google Gemini API call failed in parse_geodata_request: %s", e)
+            return False, [f"Google Gemini API call failed: {str(e)}"], {}
 
-    if not tool_input or "zones" not in tool_input:
-        return False, ["Model failed to generate structured synthetic zones."], None
+    if not tool_input:
+        return False, ["Model failed to parse structured generation parameters from request."], {}
 
-    zones = tool_input["zones"]
-    if not zones or len(zones) == 0:
-        return False, ["Model returned an empty list of zones."], None
+    # Validate and normalize
+    zone_cnt = max(10, min(int(tool_input.get("zone_count", 50)), 150))
+    scope_val = "state" if tool_input.get("scope") == "state" else "single_city"
+    rf = tool_input.get("region_filter", {}) or {}
+    country = rf.get("country_code", "IN") or "IN"
 
-    df = pd.DataFrame(zones)
+    normalized = {
+        "zone_count": zone_cnt,
+        "scope": scope_val,
+        "region_filter": {
+            "country_code": country,
+            "state_name": rf.get("state_name"),
+            "city_name": rf.get("city_name"),
+        },
+        "demand_pattern": "clustered",
+    }
+    return True, [], normalized
 
-    for col in ["neighborhood_id", "name", "latitude", "longitude", "daily_orders"]:
-        if col not in df.columns:
-            return False, [f"Missing required column in generated dataset: {col}"], None
 
-    if "capacity" not in df.columns:
-        df["capacity"] = None
+def generate_synthetic_demand_dataset(
+    zone_count: int = 50,
+    pattern: str = "clustered",
+    region_name: str = "Bengaluru",
+    prompt: Optional[str] = None,
+    scope: Optional[str] = None,
+    region_filter: Optional[Dict[str, Any]] = None,
+    seed: Optional[int] = None,
+) -> Tuple[bool, List[str], Optional[Any], Dict[str, Any]]:
+    """Generates realistic delivery zones using deterministic sampling over real public geodata
+    (dr5hn/countries-states-cities-database under ODbL 1.0).
+    The LLM is invoked strictly to parse plain-language instructions into structured parameters.
+    Coordinates, zone names, and non-uniform demand values are generated deterministically by numpy/pandas.
+    """
+    from core.geodata import generate_geodata_dataset, InsufficientCandidatesError
 
-    is_valid, errors, cleaned_df = validate_neighborhood_dataframe(df)
-    return is_valid, errors, cleaned_df
+    # Determine whether AI parameter parsing is needed
+    if prompt:
+        ok, errors, parsed_params = parse_geodata_request_with_llm(prompt)
+        if not ok:
+            return False, errors, None, {}
+    elif scope is None and region_filter is None:
+        # User came through AI generation flow without pre-structured parameters:
+        # AI parses the instruction into parameters.
+        ai_prompt = f"Generate {zone_count} delivery zones for {region_name} with {pattern} demand pattern."
+        ok, errors, parsed_params = parse_geodata_request_with_llm(ai_prompt)
+        if not ok:
+            return False, errors, None, {}
+    else:
+        # Pre-structured parameters provided directly
+        parsed_params = {
+            "zone_count": max(10, min(int(zone_count), 150)),
+            "scope": scope or "single_city",
+            "region_filter": region_filter or {"country_code": "IN", "city_name": region_name},
+            "demand_pattern": "clustered",
+        }
+
+    try:
+        is_valid, errors, clean_df, metadata = generate_geodata_dataset(
+            params=parsed_params,
+            seed=seed,
+        )
+        return is_valid, errors, clean_df, metadata
+    except InsufficientCandidatesError as e:
+        return False, [str(e)], None, {"error": str(e)}
+    except Exception as e:
+        logger.error("Error in deterministic geodata sampler: %s", e)
+        return False, [f"Deterministic geodata sampler failed: {str(e)}"], None, {}
 
 
 # ============================================================================

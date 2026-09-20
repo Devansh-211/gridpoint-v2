@@ -96,10 +96,14 @@ gridpoint/
 ├── core/
 │   ├── models.py            # Domain data classes (Neighborhood, WarehouseCandidate, CFLPResult)
 │   ├── validation.py        # Presolve feasibility checks & CSV schema validation
-│   └── metrics.py           # Financial cost formulas & safe percentage deltas
+│   ├── metrics.py           # Financial cost formulas & safe percentage deltas
+│   └── geodata.py           # Deterministic Real-Geodata Sampler & demand synthesizer
 ├── data/
-│   ├── demo_neighborhoods.csv   # Curated 36 Bengaluru delivery zones (synthetic dataset)
+│   ├── cities_geodata.csv       # 4,198 real cities/towns from dr5hn/ODbL database
+│   ├── demo_neighborhoods.csv   # Curated 36 Bengaluru delivery zones
 │   └── sample_neighborhoods.csv # Demonstration dataset
+├── scripts/
+│   └── download_geodata.py  # One-time script to fetch & filter public cities geodata
 ├── optimization/
 │   ├── cflp.py              # PuLP/CBC MILP formulation with Greedy + 2-Opt Heuristic fallback
 │   ├── assignment.py        # Neighborhood cluster assignment & utilization aggregator
@@ -202,6 +206,7 @@ Open your browser to: **`http://127.0.0.1:8000/`** (Interactive API Swagger Docs
 - **Cost & Emissions Estimates:** All financial figures and carbon metrics carry visible **`[Estimate]`** tags and show their calculation assumptions nearby.
 - **Fast Delivery Proxy:** Fast delivery coverage is explicitly labeled **"Distance-based service proxy"** (% of demand within 5 km) — never guaranteeing delivery time SLAs.
 - **No Fake AI:** The "Why here?" explainability panel is generated strictly from real solver metrics, objective gradients, and candidate score gaps.
+- **Real-Geodata Sampler & Synthetic Demand:** Demonstration networks never hallucinate random coordinates or non-existent places with an LLM. State networks sample distinct real towns from `dr5hn/countries-states-cities-database` (`[Real Towns, Synthetic Demand]`); single-city networks jitter derived demo zones around a real city anchor (`[Real City Anchor, Jittered Zones & Synthetic Demand]`). Demand is clustered deterministically with NumPy, while LLM involvement is strictly constrained to parsing plain-language user requests into structured parameters.
 
 ---
 
@@ -229,6 +234,7 @@ Open your browser to: **`http://127.0.0.1:8000/`** (Interactive API Swagger Docs
 GRIDPOINT is built upon open data, open-source mathematical solvers, and community-driven geospatial tools. We gratefully acknowledge the following projects and resources:
 
 ### Open Data & Geographic Sources
+- **[dr5hn/countries-states-cities-database](https://github.com/dr5hn/countries-states-cities-database)** (mirrored as `liewyousheng/geolocation` on Kaggle): Comprehensive open-source global geodata repository (licensed under the [Open Database License (ODbL) v1.0](https://opendatacommons.org/licenses/odbl/)). Filtered and utilized in `data/cities_geodata.csv` for GRIDPOINT's deterministic real-geodata sampler (4,198 real cities/towns across Indian states and territories).
 - **[OpenStreetMap (OSM)](https://www.openstreetmap.org/)**: Geographic coordinate reference data and locality centroids for Bengaluru metropolitan wards and urban hubs (licensed under the [Open Database License (ODbL)](https://opendatacommons.org/licenses/odbl/)).
 - **[CARTO Base Maps (Positron & Dark Matter)](https://carto.com/basemaps/)**: Open-access map tile services used for rendering the interactive Leaflet centerpiece map and cluster assignment spider lines (Map tiles © CARTO, Data © OpenStreetMap contributors).
 - **[Bruhat Bengaluru Mahanagara Palike (BBMP) Open Data & Census of India](https://bbmp.gov.in/)**: Urban ward boundaries, commercial density patterns, and population distributions that informed the realistic demand volumes and clustering parameters in `demo_neighborhoods.csv`.

@@ -56,10 +56,10 @@ SOLVE_CACHE: Dict[str, OptimizeResponse] = {}
 EMISSIONS_KG_PER_KM = 0.21
 
 
-def _compute_solve_cache_key(req: OptimizeRequest, session_id: str) -> str:
+def _compute_solve_cache_key(req: OptimizeRequest, session_id: str, zone_count: int = 0, total_demand: float = 0.0) -> str:
     """Computes deterministic hash for request parameters to prevent redundant CPU solves."""
     raw = (
-        f"{session_id}_{req.p}_{req.auto_size}_{req.p_max}_{req.warehouse_capacity}_{req.radius_max_km}_"
+        f"{session_id}_{zone_count}_{total_demand:.1f}_{req.p}_{req.auto_size}_{req.p_max}_{req.warehouse_capacity}_{req.radius_max_km}_"
         f"{req.cost_per_km}_{req.fixed_cost_per_warehouse}_{req.routing_mode}_"
         f"{req.priority_preset}_{req.include_cvrp}_{req.vehicle_capacity}_{req.vehicle_fixed_cost}"
     )
@@ -183,6 +183,7 @@ async def upload_neighborhood_csv(file: UploadFile = File(...)):
         "last_optimize": None,
         "last_matrix": None,
     }
+    SOLVE_CACHE.clear()
 
     total_demand = sum(n.daily_orders for n in neighborhoods)
     preview_items = [
@@ -236,6 +237,7 @@ def set_manual_neighborhoods(req: NeighborhoodListRequest):
         "last_optimize": None,
         "last_matrix": None,
     }
+    SOLVE_CACHE.clear()
 
     total_demand = sum(n.daily_orders for n in neighborhoods)
     return UploadResponse(
@@ -255,7 +257,7 @@ def optimize_network(req: OptimizeRequest):
     total_demand = sum(n.daily_orders for n in neighborhoods)
 
     # Server-side cache check
-    cache_key = _compute_solve_cache_key(req, req.session_id or "default")
+    cache_key = _compute_solve_cache_key(req, req.session_id or "default", zone_count=len(neighborhoods), total_demand=total_demand)
     if cache_key in SOLVE_CACHE:
         logger.info("Serving optimization solution from server-side cache (key: %s)", cache_key)
         cached_response = SOLVE_CACHE[cache_key]
@@ -587,12 +589,15 @@ def optimize_network(req: OptimizeRequest):
 def get_baseline_comparison(session_id: str = "default"):
     """Compares the optimized network against the Single-Warehouse Reference Baseline."""
     session = _get_or_load_default_session(session_id)
+    neighborhoods: List[Neighborhood] = session["neighborhoods"]
     last_opt: Optional[OptimizeResponse] = session.get("last_optimize")
 
     if last_opt is None:
-        last_opt = optimize_network(OptimizeRequest(session_id=session_id))
+        demands = {n.id: n.daily_orders for n in neighborhoods}
+        total_demand = sum(demands.values())
+        safe_cap = max(4000.0, (total_demand / 3.0) * 1.5)
+        last_opt = optimize_network(OptimizeRequest(session_id=session_id, warehouse_capacity=safe_cap))
 
-    neighborhoods: List[Neighborhood] = session["neighborhoods"]
     matrix: DistanceMatrix = session["last_matrix"]
     demands = {n.id: n.daily_orders for n in neighborhoods}
     total_demand = sum(demands.values())
@@ -681,9 +686,17 @@ def get_tradeoff_curve(session_id: str = "default", fixed_cost: float = 300.0, c
     neighborhoods: List[Neighborhood] = session["neighborhoods"]
     matrix = get_matrix(neighborhoods, mode="haversine")
 
+    total_demand = sum(n.daily_orders for n in neighborhoods)
+    fallback_cap = max(4000.0, float(total_demand) * 1.25)
     points: List[TradeoffPoint] = []
     candidates = [
-        WarehouseCandidate(id=n.id, name=n.name, latitude=n.latitude, longitude=n.longitude, capacity=4000.0)
+        WarehouseCandidate(
+            id=n.id,
+            name=n.name,
+            latitude=n.latitude,
+            longitude=n.longitude,
+            capacity=n.capacity if (n.capacity is not None and n.capacity > 0) else fallback_cap,
+        )
         for n in neighborhoods
     ]
 
@@ -773,23 +786,47 @@ def run_scenario(req: ScenarioRequest):
 def explain_warehouse_selection(warehouse_id: str, session_id: str = "default"):
     """Explains why a specific warehouse was chosen, its metrics, and the next-best rejected candidate."""
     session = _get_or_load_default_session(session_id)
+    neighborhoods: List[Neighborhood] = session.get("neighborhoods", [])
+    if not neighborhoods:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No delivery zones loaded in current session. Ingest data first.",
+        )
+
     last_opt: Optional[OptimizeResponse] = session.get("last_optimize")
 
     if last_opt is None:
-        last_opt = optimize_network(OptimizeRequest(session_id=session_id))
+        total_demand = sum(n.daily_orders for n in neighborhoods)
+        p_val = min(3, len(neighborhoods))
+        safe_cap = max(4000.0, (total_demand / max(1, p_val)) * 1.5)
+        try:
+            last_opt = optimize_network(OptimizeRequest(session_id=session_id, p=p_val, warehouse_capacity=safe_cap))
+        except Exception as opt_err:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Please run network optimization before requesting explainability: {str(opt_err)}",
+            )
 
-    neighborhoods: List[Neighborhood] = session["neighborhoods"]
-    matrix: DistanceMatrix = session["last_matrix"]
+    if not last_opt or not last_opt.warehouses:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No warehouses are currently opened. Run network optimization first.",
+        )
+
+    matrix: Optional[DistanceMatrix] = session.get("last_matrix")
+    if matrix is None:
+        routing_mode = last_opt.assumptions.get("routing_mode", "haversine") if (last_opt and last_opt.assumptions) else "haversine"
+        matrix = get_matrix(neighborhoods, mode=routing_mode)
+        session["last_matrix"] = matrix
+
     total_demand = sum(n.daily_orders for n in neighborhoods)
     n_map = {n.id: n for n in neighborhoods}
 
-    # Find the requested warehouse summary
+    # Find the requested warehouse summary with graceful fallback to first open site
     target_w = next((w for w in last_opt.warehouses if w.warehouse_id == warehouse_id), None)
     if not target_w:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Warehouse '{warehouse_id}' is not in the set of currently opened warehouses ({[w.warehouse_id for w in last_opt.warehouses]}).",
-        )
+        target_w = last_opt.warehouses[0]
+        warehouse_id = target_w.warehouse_id
 
     # Compute assigned neighborhoods and metrics
     assigned_items = [a for a in last_opt.assignments if a.warehouse_id == warehouse_id]
@@ -813,16 +850,17 @@ def explain_warehouse_selection(warehouse_id: str, session_id: str = "default"):
         )
 
     # Calculate order-km burden eliminated vs single-warehouse baseline
-    # Find 1-median baseline
-    best_cand_id = min(
-        neighborhoods,
-        key=lambda c: sum(n.daily_orders * matrix.distances_km.get(c.id, {}).get(n.id, 0.0) for n in neighborhoods)
-    ).id
-    baseline_dist_for_assigned = sum(
-        a.daily_orders * matrix.distances_km.get(best_cand_id, {}).get(a.neighborhood_id, 0.0)
-        for a in assigned_items
-    )
-    burden_eliminated = max(0.0, round(baseline_dist_for_assigned - w_dist_contrib, 1))
+    burden_eliminated = 0.0
+    if neighborhoods:
+        best_cand_id = min(
+            neighborhoods,
+            key=lambda c: sum(n.daily_orders * matrix.distances_km.get(c.id, {}).get(n.id, 0.0) for n in neighborhoods)
+        ).id
+        baseline_dist_for_assigned = sum(
+            a.daily_orders * matrix.distances_km.get(best_cand_id, {}).get(a.neighborhood_id, 0.0)
+            for a in assigned_items
+        )
+        burden_eliminated = max(0.0, round(baseline_dist_for_assigned - w_dist_contrib, 1))
 
     # Compute next-best rejected candidate
     open_ids = {w.warehouse_id for w in last_opt.warehouses}
@@ -886,21 +924,26 @@ def extract_agent_parameters(req: AgentExtractRequest):
 
 @router.post("/agent/generate-synthetic-data", response_model=UploadResponse)
 def generate_synthetic_data(req: SyntheticDataRequest):
-    """Generates a realistic non-uniform clustered synthetic dataset with explicit consent.
-    Strictly validates output through the identical core data contract validator.
+    """Generates realistic delivery zones using deterministic sampling over real public geodata
+    (dr5hn/countries-states-cities-database under ODbL 1.0) with synthetic non-uniform demand.
+    If a free-text prompt is provided, LLM extracts generation parameters.
     """
     try:
         zone_cnt = req.zone_count if req.zone_count is not None else 50
         pat = req.pattern_hint or req.pattern or "clustered"
         reg = req.city_hint or req.region_name or "Bengaluru"
-        is_valid, errors, clean_df = generate_synthetic_demand_dataset(
+        is_valid, errors, clean_df, meta = generate_synthetic_demand_dataset(
             zone_count=zone_cnt,
             pattern=pat,
             region_name=reg,
+            prompt=req.prompt,
+            scope=req.scope,
+            region_filter=req.region_filter,
+            seed=req.seed,
         )
         if not is_valid or clean_df is None:
             err_msg = errors[0] if errors else "Synthetic data generation failed"
-            status_code = status.HTTP_503_SERVICE_UNAVAILABLE if any("ANTHROPIC_API_KEY" in e or "unavailable" in e.lower() for e in errors) else status.HTTP_422_UNPROCESSABLE_ENTITY
+            status_code = status.HTTP_503_SERVICE_UNAVAILABLE if any("API_KEY" in e or "unavailable" in e.lower() for e in errors) else status.HTTP_422_UNPROCESSABLE_ENTITY
             raise HTTPException(
                 status_code=status_code,
                 detail={"error": err_msg, "errors": errors},
@@ -919,14 +962,24 @@ def generate_synthetic_data(req: SyntheticDataRequest):
             for _, row in clean_df.iterrows()
         ]
 
+        badge_text = meta.get("badge_text", "[Real Locations, Synthetic Demand]")
+        scope_val = meta.get("scope", req.scope or "single_city")
+        seed_val = meta.get("seed", req.seed)
+        source_label = meta.get("source_label", "Real Geodata & Synthetic Demand")
+
         SESSION_STORE[session_id] = {
             "neighborhoods": neighborhoods,
             "df": clean_df,
             "last_optimize": None,
             "last_matrix": None,
             "is_synthetic_ai": True,
-            "dataset_type": "ai_synthetic",
+            "dataset_type": "real_locations_synthetic_demand",
+            "badge_text": badge_text,
+            "scope": scope_val,
+            "seed": seed_val,
+            "source_label": source_label,
         }
+        SOLVE_CACHE.clear()
 
         total_demand = sum(n.daily_orders for n in neighborhoods)
         preview_items = [
@@ -947,7 +1000,12 @@ def generate_synthetic_data(req: SyntheticDataRequest):
             total_demand=round(total_demand, 1),
             preview=preview_items,
             is_synthetic_ai=True,
-            dataset_type="ai_synthetic",
+            dataset_type="real_locations_synthetic_demand",
+            badge_text=badge_text,
+            scope=scope_val,
+            seed=seed_val,
+            data_source=meta.get("data_source", "dr5hn/countries-states-cities-database (ODbL 1.0)"),
+            source_label=source_label,
         )
     except HTTPException:
         raise

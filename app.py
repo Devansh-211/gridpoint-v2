@@ -42,6 +42,14 @@ async def lifespan(app: FastAPI):
         logger.error(msg)
         raise RuntimeError(msg) from exc
 
+    # Load cities geodata once into memory at backend startup
+    try:
+        from core.geodata import load_cities_geodata
+        cities_cache = load_cities_geodata()
+        logger.info(f"✅ Cities geodata loaded into memory: {len(cities_cache):,} cities.")
+    except Exception as exc:
+        logger.warning(f"⚠️ Geodata loading notice: {exc}")
+
     yield
     logger.info("GRIDPOINT platform shutting down.")
 

@@ -162,7 +162,7 @@
           <span class="gp-breadcrumb" id="headerBreadcrumb">Setup / Entry</span>
           <span style="color:var(--gp-border-strong);">/</span>
           <h2 class="gp-screen-title" id="headerScreenTitle">Landing & Entry</h2>
-          <span class="gp-badge gp-badge-synthetic" id="headerSyntheticBadge" style="display:none; margin-left:var(--gp-space-2);">[AI-Generated Synthetic Dataset]</span>
+          <span class="gp-badge gp-badge-synthetic" id="headerSyntheticBadge" style="display:none; margin-left:var(--gp-space-2);">[Real Locations, Synthetic Demand]</span>
         </div>
 
         <div class="gp-header-actions">
@@ -1034,6 +1034,15 @@
                   </p>
                 </div>
 
+                <!-- 4. Public Geodata Source & Attribution -->
+                <div class="gp-doc-section">
+                  <h4 style="font-size:14px; font-weight:700; color:var(--gp-text-primary);">4. Public Geodata Source & Attribution (Honesty Disclosure)</h4>
+                  <p style="font-size:13px; color:var(--gp-text-secondary); line-height:1.5;">
+                    Real city and town coordinates used in network sampling are sourced from the open-source <strong>dr5hn/countries-states-cities-database</strong> (mirrored on Kaggle as <code>liewyousheng/geolocation</code>) under the <strong>Open Database License (ODbL) v1.0</strong>.<br>
+                    <em>Sampler Architecture:</em> No model call hallucinates coordinates or names. In regional mode, distinct real towns are sampled directly from this verified public dataset. In single-city mode, derived demonstration zones are jittered within 2&ndash;8 km of a real city anchor. Order volumes and capacity requirements are synthesized using deterministic, non-uniform statistical distributions. The LLM is used strictly to parse plain-language instructions into structured configuration parameters.
+                  </p>
+                </div>
+
               </div>
             </div>
 
@@ -1140,15 +1149,30 @@
         </div>
       </div>
 
-      <!-- Synthetic Data Generator Form Container (Phase 3) -->
+      <!-- Real-Geodata Sampler & Synthetic Demand Container (Phase 3) -->
       <div id="agentSyntheticContainer" style="display:none; flex-direction:column; gap:var(--gp-space-3);">
         <div class="gp-agent-synthetic-card">
           <div style="font-weight:700; font-size:13px; color:var(--gp-text-primary); display:flex; justify-content:space-between; align-items:center;">
-            <span>AI Synthetic Demand Generation</span>
-            <span class="gp-badge gp-badge-synthetic">[Opt-In]</span>
+            <span>Real-Geodata Sampler & Synthetic Demand</span>
+            <span class="gp-badge gp-badge-synthetic">[Deterministic + AI Parser]</span>
           </div>
           <div style="font-size:12px; color:var(--gp-text-secondary);">
-            Generate a realistic non-uniform clustered delivery zone dataset for scale testing.
+            Deterministic sampling over real public cities geodata (dr5hn / ODbL 1.0) paired with clustered synthetic order demand.
+          </div>
+
+          <!-- Natural Language Instruction Input -->
+          <div class="gp-form-group">
+            <label class="gp-label"><span>Plain-Language Request (Optional)</span></label>
+            <textarea class="gp-input" id="inputSynthPrompt" rows="2" style="resize:vertical; font-size:12px;" placeholder="e.g. '80 zones spread across Karnataka' or '40 neighborhoods around Bengaluru'"></textarea>
+            <div style="font-size:11px; color:var(--gp-text-muted); margin-top:2px;">AI parses your request into parameters only. Coordinates & names are sampled from real public geodata.</div>
+          </div>
+
+          <div class="gp-form-group">
+            <label class="gp-label"><span>Sampling Scope</span></label>
+            <select class="gp-select" id="selectSynthScope">
+              <option value="single_city">Single City Anchor (Derived Jittered Zones)</option>
+              <option value="state">Regional / Statewide Network (Distinct Real Towns)</option>
+            </select>
           </div>
 
           <div class="gp-form-group">
@@ -1160,35 +1184,44 @@
           </div>
 
           <div class="gp-form-group">
-            <label class="gp-label"><span>Demand Pattern Distribution</span></label>
-            <select class="gp-select" id="selectSynthPattern">
-              <option value="clustered">Clustered Urban Core (Recommended)</option>
-              <option value="multi_hub">Multi-Hub Metro Area</option>
-              <option value="corridor">Linear Commercial Corridor</option>
-            </select>
-          </div>
-
-          <div class="gp-form-group">
-            <label class="gp-label"><span>Geographic Region Flavor</span></label>
+            <label class="gp-label"><span>Geographic Anchor / Region</span></label>
             <select class="gp-select" id="selectSynthRegion">
-              <option value="Bengaluru">Bengaluru Metro (Tech & Urban Clusters)</option>
-              <option value="Mumbai">Mumbai Metro (High-Density Multi-Hub)</option>
-              <option value="Delhi">Delhi NCR (Sprawling Radial Metro)</option>
+              <optgroup label="Single City Anchors">
+                <option value="Bengaluru" selected>Bengaluru Metro, Karnataka</option>
+                <option value="Mumbai">Mumbai Metro, Maharashtra</option>
+                <option value="Delhi">Delhi NCR</option>
+                <option value="Chennai">Chennai, Tamil Nadu</option>
+                <option value="Hyderabad">Hyderabad, Telangana</option>
+              </optgroup>
+              <optgroup label="Statewide Networks">
+                <option value="Karnataka">Karnataka (270+ real towns)</option>
+                <option value="Maharashtra">Maharashtra (550+ real towns)</option>
+                <option value="Tamil Nadu">Tamil Nadu (350+ real towns)</option>
+                <option value="Gujarat">Gujarat (300+ real towns)</option>
+                <option value="Uttar Pradesh">Uttar Pradesh (600+ real towns)</option>
+              </optgroup>
             </select>
           </div>
 
-          <!-- Explicit 2-Step Consent Confirmation Box -->
+          <!-- Updated Consent Notice -->
           <div class="gp-agent-consent-box">
-            <div style="font-weight:700;">⚠️ Two-Step Consent & Labeling Notice</div>
-            <div>
-              This feature generates fictional demonstration data, not real customer records. 
-              The entire workspace will carry a persistent <strong>[AI-Generated Synthetic Dataset]</strong> label until a verified dataset is loaded.
+            <div style="font-weight:700; display:flex; align-items:center; gap:4px;">
+              <span>⚠️ Real Geodata & Synthetic Demand Notice</span>
+            </div>
+            <div style="font-size:11.5px; line-height:1.45; margin-top:4px;">
+              This feature uses <strong>real public place names and coordinates</strong> sourced from the open-source <code>dr5hn/countries-states-cities-database</code> (ODbL 1.0) paired with <strong>statistically non-uniform synthetic demand</strong>.
+              <br><br>
+              The workspace will carry a persistent provenance badge:
+              <br>&bull; Regional scope: <strong>[Real Towns, Synthetic Demand]</strong>
+              <br>&bull; Single city scope: <strong>[Real City Anchor, Jittered Zones & Synthetic Demand]</strong>
+              <br><br>
+              <em>AI Role:</em> The LLM only parses plain-language requests into parameters. No coordinates, place names, or demand values are invented by an AI model.
             </div>
           </div>
 
           <div style="display:flex; gap:var(--gp-space-2); margin-top:var(--gp-space-1);">
             <button class="gp-btn gp-btn-secondary gp-btn-sm" id="btnCancelSynthetic" style="flex:1;">Cancel</button>
-            <button class="gp-btn gp-btn-primary gp-btn-sm" id="btnConfirmGenerateSynthetic" style="flex:2;">Generate Synthetic Data</button>
+            <button class="gp-btn gp-btn-primary gp-btn-sm" id="btnConfirmGenerateSynthetic" style="flex:2;">Generate & Sample Data</button>
           </div>
         </div>
       </div>

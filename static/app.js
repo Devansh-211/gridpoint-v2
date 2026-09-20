@@ -124,12 +124,18 @@ const EXPLAIN_PROMPTS_BY_VIEW = {
   ],
 };
 
-function updateSyntheticDatasetBadge(isSynthetic) {
+function updateSyntheticDatasetBadge(isSynthetic, badgeText, scope) {
   appState.isSyntheticAi = !!isSynthetic;
-  appState.datasetType = isSynthetic ? "ai_synthetic" : "demo";
+  appState.datasetType = isSynthetic ? "real_locations_synthetic_demand" : "demo";
+  appState.syntheticScope = scope || appState.syntheticScope || "single_city";
+  appState.syntheticBadgeText = badgeText || (appState.syntheticScope === "state" ? "[Real Towns, Synthetic Demand]" : "[Real City Anchor, Jittered Zones & Synthetic Demand]");
+  
   const badge = document.getElementById("headerSyntheticBadge");
   if (badge) {
     badge.style.display = isSynthetic ? "inline-flex" : "none";
+    if (isSynthetic) {
+      badge.textContent = appState.syntheticBadgeText;
+    }
   }
 }
 
@@ -804,10 +810,51 @@ function applyCanonicalDataset(data, options = {}) {
   appState.sessionId = data.session_id || "default";
   appState.neighborhoods = data.preview;
   appState.datasetLoaded = true;
+  appState.explainCache = {};
+  appState.lastOptimize = null;
   appState.isSyntheticAi = !!options.isSynthetic;
-  appState.datasetType = options.isSynthetic ? "ai_synthetic" : (options.source || "demo");
+  appState.datasetType = options.datasetType || (options.isSynthetic ? "real_locations_synthetic_demand" : (options.source || "demo"));
+  const badgeText = data.badge_text || options.badgeText;
+  const scope = data.scope || options.scope;
 
-  updateSyntheticDatasetBadge(appState.isSyntheticAi);
+  const totalDem = data.total_demand || (data.preview ? data.preview.reduce((s, n) => s + (n.daily_orders || 0), 0) : 10000);
+  const nZones = data.preview ? data.preview.length : 36;
+
+  // Calibrate warehouse capacity and facility count limits to match dataset scale
+  const suggestedCap = totalDem > 12000 ? Math.ceil((totalDem / 3.0) * 1.35 / 500) * 500 : 4000;
+  const maxCap = Math.max(25000, Math.ceil(totalDem * 1.5 / 1000) * 1000);
+
+  const elCap = document.getElementById("inputConfigCap");
+  if (elCap) {
+    elCap.max = maxCap;
+    elCap.value = suggestedCap;
+    const valCap = document.getElementById("valConfigCap");
+    if (valCap) valCap.textContent = `${Number(suggestedCap).toLocaleString()} orders/day`;
+    agentState.knownParams.warehouse_capacity = suggestedCap;
+  }
+
+  const elP = document.getElementById("inputConfigP");
+  if (elP) {
+    elP.max = Math.min(nZones, 20);
+    const minPNeeded = Math.ceil(totalDem / suggestedCap);
+    const targetP = Math.max(minPNeeded, Math.min(parseInt(elP.value) || 3, parseInt(elP.max)));
+    elP.value = targetP;
+    const valP = document.getElementById("valConfigP");
+    if (valP) valP.textContent = `${targetP} sites`;
+    agentState.knownParams.warehouse_count = targetP;
+  }
+
+  const elPMax = document.getElementById("inputConfigPMax");
+  if (elPMax) {
+    elPMax.max = Math.min(nZones, 20);
+    const currentP = parseInt(document.getElementById("inputConfigP")?.value) || 3;
+    const suggestedPMax = Math.max(currentP, Math.min(nZones, 6));
+    elPMax.value = suggestedPMax;
+    const valPMax = document.getElementById("valConfigPMax");
+    if (valPMax) valPMax.textContent = `${suggestedPMax} sites`;
+  }
+
+  updateSyntheticDatasetBadge(appState.isSyntheticAi, badgeText, scope);
   renderDataInputTable(data.preview);
   renderDemandMap(data.preview);
   updateDashboardStats();
@@ -918,7 +965,7 @@ async function runOptimization() {
       "No Dataset Loaded",
       "No delivery zone dataset is currently loaded in memory. Please load the Bengaluru demo dataset, upload a CSV file, or generate AI synthetic data before running optimization."
     );
-    return;
+    return false;
   }
 
   const isAuto = appState.configMode === "auto";
@@ -938,7 +985,7 @@ async function runOptimization() {
       `Requested maximum warehouse count p_max=${pMax} exceeds total candidate sites (${appState.neighborhoods.length}).`,
       ["You cannot consider more warehouses than available candidate locations. Reduce p_max ceiling or add more zones."]
     );
-    return;
+    return false;
   }
 
   const payload = {
@@ -967,7 +1014,7 @@ async function runOptimization() {
     const data = await res.json();
     if (!res.ok) {
       showErrorModal("Optimization Infeasible", data.detail?.error || "Constraint violation", data.detail?.diagnostics || []);
-      return;
+      return false;
     }
 
     appState.lastOptimize = data;
@@ -979,8 +1026,10 @@ async function runOptimization() {
     updateDashboardStats();
 
     showToast(`Network Optimized: ${data.p} warehouses serving ${data.assignments.length} delivery zones.`);
+    return true;
   } catch (err) {
     showErrorModal("Network Request Failed", err.message);
+    return false;
   }
 }
 
@@ -1386,65 +1435,111 @@ async function loadExplainability(warehouseId) {
   const container = document.getElementById("boxExplainContent");
   if (!container) return;
 
+  if (!warehouseId || warehouseId === "undefined" || warehouseId === "null") {
+    container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--gp-text-tertiary);">Select an open warehouse facility above to inspect explainability.</div>';
+    return;
+  }
+
   container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--gp-text-tertiary);">Computing solver intelligence...</div>';
 
   try {
     let data = appState.explainCache[warehouseId];
     if (!data) {
-      const res = await fetch(`/api/explain/${warehouseId}?session_id=${appState.sessionId}`);
-      data = await res.json();
+      const res = await fetch(`/api/explain/${encodeURIComponent(warehouseId)}?session_id=${encodeURIComponent(appState.sessionId)}`);
+      const resData = await res.json();
+      if (!res.ok) {
+        let errDetail = "Optimization solution not available for this site.";
+        if (typeof resData.detail === "string") {
+          errDetail = resData.detail;
+        } else if (resData.detail?.error) {
+          errDetail = resData.detail.error;
+          if (Array.isArray(resData.detail.diagnostics) && resData.detail.diagnostics.length > 0) {
+            errDetail += `: ${resData.detail.diagnostics.join("; ")}`;
+          }
+        } else if (resData.error) {
+          errDetail = resData.error;
+        }
+        throw new Error(errDetail);
+      }
+      data = resData;
       appState.explainCache[warehouseId] = data;
     }
 
+    if (!data || typeof data !== "object") {
+      throw new Error("Invalid solver intelligence response.");
+    }
+
+    const demandDrivers = Array.isArray(data.key_demand_drivers) ? data.key_demand_drivers : [];
     let driversHtml = '<table class="gp-table" style="margin-top:8px;"><thead><tr><th>Top Delivery Zone</th><th>Daily Demand</th><th>Geographic Distance</th><th>Order-km Contribution</th></tr></thead><tbody>';
-    data.key_demand_drivers.forEach(d => {
-      driversHtml += `
-        <tr>
-          <td><strong>${d.name}</strong> (${d.neighborhood_id})</td>
-          <td>${d.daily_orders.toLocaleString()} orders</td>
-          <td>${d.distance_km.toFixed(2)} km</td>
-          <td><span style="font-family:var(--gp-font-family-mono); color:var(--gp-primary-600);">${d.weighted_ord_km.toLocaleString()} ord·km</span></td>
-        </tr>
-      `;
-    });
+    if (demandDrivers.length === 0) {
+      driversHtml += '<tr><td colspan="4" style="text-align:center; color:var(--gp-text-tertiary); padding:12px;">No primary demand drivers recorded for this facility.</td></tr>';
+    } else {
+      demandDrivers.forEach(d => {
+        const dName = d.name || d.neighborhood_id || "Zone";
+        const dId = d.neighborhood_id || "";
+        const orders = Number(d.daily_orders || 0).toLocaleString();
+        const dist = Number(d.distance_km || 0).toFixed(2);
+        const wKm = Number(d.weighted_ord_km || 0).toLocaleString();
+        driversHtml += `
+          <tr>
+            <td><strong>${dName}</strong> ${dId ? `(${dId})` : ''}</td>
+            <td>${orders} orders</td>
+            <td>${dist} km</td>
+            <td><span style="font-family:var(--gp-font-family-mono); color:var(--gp-primary-600);">${wKm} ord·km</span></td>
+          </tr>
+        `;
+      });
+    }
     driversHtml += '</tbody></table>';
 
     let rejectedHtml = '';
     if (data.next_best_rejected) {
+      const rejName = data.next_best_rejected.name || "Alternative site";
+      const rejId = data.next_best_rejected.candidate_id || "";
+      const rejReason = data.next_best_rejected.reason_rejected || "Higher overall delivery penalty.";
+      const rejGap = Number(data.next_best_rejected.score_gap_weighted_km || 0).toLocaleString();
       rejectedHtml = `
         <div style="background:var(--gp-surface-sunken); border:1px solid var(--gp-border); border-radius:var(--gp-radius-sm); padding:var(--gp-space-3); margin-top:var(--gp-space-3);">
-          <div style="font-weight:700; font-size:13px; color:var(--gp-text-primary);">Runner-Up Candidate in this Sector: ${data.next_best_rejected.name} (${data.next_best_rejected.candidate_id})</div>
-          <p style="font-size:12px; color:var(--gp-text-secondary); margin-top:2px;">${data.next_best_rejected.reason_rejected}</p>
+          <div style="font-weight:700; font-size:13px; color:var(--gp-text-primary);">Runner-Up Candidate in this Sector: ${rejName} ${rejId ? `(${rejId})` : ''}</div>
+          <p style="font-size:12px; color:var(--gp-text-secondary); margin-top:2px;">${rejReason}</p>
           <div style="font-size:11px; font-family:var(--gp-font-family-mono); color:var(--gp-warning); margin-top:4px;">
-            Objective Gap: +${data.next_best_rejected.score_gap_weighted_km.toLocaleString()} ord·km higher total travel penalty.
+            Objective Gap: +${rejGap} ord·km higher total travel penalty.
           </div>
         </div>
       `;
     }
 
+    const demandServed = Number(data.demand_served || 0).toLocaleString();
+    const demandPct = Number(data.demand_pct_of_total || 0).toFixed(1);
+    const capUtil = Number(data.capacity_utilization_pct || 0).toFixed(1);
+    const maxCap = Number(data.capacity || 0).toLocaleString();
+    const avgDist = Number(data.avg_distance_km || 0).toFixed(2);
+    const zonesServed = Number(data.neighborhoods_served_count || 0);
+    const burdenElim = Number(data.burden_eliminated_km || 0).toLocaleString();
+
     container.innerHTML = `
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:var(--gp-space-3); margin-bottom:var(--gp-space-4);">
         <div style="background:var(--gp-surface-sunken); padding:var(--gp-space-3); border-radius:var(--gp-radius-sm);">
           <div style="font-size:11px; color:var(--gp-text-tertiary); text-transform:uppercase; font-weight:600;">Assigned Demand</div>
-          <div style="font-size:18px; font-weight:700; color:var(--gp-text-primary); margin-top:2px;">${data.demand_served.toLocaleString()} ord/day</div>
-          <div style="font-size:11px; color:var(--gp-text-tertiary);">${data.demand_pct_of_total}% of citywide volume</div>
+          <div style="font-size:18px; font-weight:700; color:var(--gp-text-primary); margin-top:2px;">${demandServed} ord/day</div>
+          <div style="font-size:11px; color:var(--gp-text-tertiary);">${demandPct}% of network volume</div>
         </div>
 
         <div style="background:var(--gp-surface-sunken); padding:var(--gp-space-3); border-radius:var(--gp-radius-sm);">
           <div style="font-size:11px; color:var(--gp-text-tertiary); text-transform:uppercase; font-weight:600;">Capacity Utilization</div>
-          <div style="font-size:18px; font-weight:700; color:var(--gp-text-primary); margin-top:2px;">${data.capacity_utilization_pct.toFixed(1)}%</div>
-          <div style="font-size:11px; color:var(--gp-text-tertiary);">${data.capacity.toLocaleString()} max capacity</div>
+          <div style="font-size:18px; font-weight:700; color:var(--gp-text-primary); margin-top:2px;">${capUtil}%</div>
+          <div style="font-size:11px; color:var(--gp-text-tertiary);">${maxCap} max capacity</div>
         </div>
 
         <div style="background:var(--gp-surface-sunken); padding:var(--gp-space-3); border-radius:var(--gp-radius-sm);">
           <div style="font-size:11px; color:var(--gp-text-tertiary); text-transform:uppercase; font-weight:600;">Average Delivery Radius</div>
-          <div style="font-size:18px; font-weight:700; color:var(--gp-text-primary); margin-top:2px;">${data.avg_distance_km.toFixed(2)} km</div>
-          <div style="font-size:11px; color:var(--gp-text-tertiary);">${data.neighborhoods_served_count} delivery zones served</div>
+          <div style="font-size:18px; font-weight:700; color:var(--gp-text-primary); margin-top:2px;">${avgDist} km</div>
+          <div style="font-size:11px; color:var(--gp-text-tertiary);">${zonesServed} delivery zones served</div>
         </div>
 
         <div style="background:var(--gp-surface-sunken); padding:var(--gp-space-3); border-radius:var(--gp-radius-sm);">
           <div style="font-size:11px; color:var(--gp-text-tertiary); text-transform:uppercase; font-weight:600;">Eliminated Burden</div>
-          <div style="font-size:18px; font-weight:700; color:var(--gp-success); margin-top:2px;">-${data.burden_eliminated_km.toLocaleString()} ord·km</div>
+          <div style="font-size:18px; font-weight:700; color:var(--gp-success); margin-top:2px;">-${burdenElim} ord·km</div>
           <div style="font-size:11px; color:var(--gp-text-tertiary);">vs single-facility centroid</div>
         </div>
       </div>
@@ -1457,7 +1552,16 @@ async function loadExplainability(warehouseId) {
       ${rejectedHtml}
     `;
   } catch (err) {
-    container.innerHTML = `<div style="color:var(--gp-danger); font-size:13px;">Failed to fetch explainability: ${err.message}</div>`;
+    const safeMsg = String(err.message || err).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    container.innerHTML = `
+      <div style="background:rgba(217, 48, 37, 0.05); border:1px solid rgba(217, 48, 37, 0.25); border-radius:var(--gp-radius-sm); padding:var(--gp-space-4); color:var(--gp-text-primary);">
+        <div style="font-weight:700; font-size:13px; color:var(--gp-danger); margin-bottom:4px;">Unable to load warehouse explainability</div>
+        <p style="font-size:12px; color:var(--gp-text-secondary); margin:0;">${safeMsg}</p>
+        <div style="margin-top:8px;">
+          <button class="gp-btn gp-btn-secondary gp-btn-sm" onclick="runOptimization()">Run Optimization Now</button>
+        </div>
+      </div>
+    `;
   }
 }
 
@@ -1710,8 +1814,8 @@ function setupEventListeners() {
   });
   document.getElementById("btnDashQuickData").addEventListener("click", () => switchView("viewData"));
   document.getElementById("btnDashQuickOptimize").addEventListener("click", async () => {
-    await runOptimization();
-    switchView("viewResults");
+    const ok = await runOptimization();
+    if (ok) switchView("viewResults");
   });
 
   // 5. Header Bar Global Actions
@@ -1720,8 +1824,8 @@ function setupEventListeners() {
     switchView("viewResults");
   });
   document.getElementById("btnGlobalOptimize").addEventListener("click", async () => {
-    await runOptimization();
-    switchView("viewResults");
+    const ok = await runOptimization();
+    if (ok) switchView("viewResults");
   });
 
   // 6. Data Input View Actions
@@ -1748,7 +1852,8 @@ function setupEventListeners() {
         source: "csv",
         toastMessage: `Uploaded ${data.neighborhood_count} zones (${data.total_demand.toLocaleString()} orders/day).`
       });
-      await runOptimization();
+      const ok = await runOptimization();
+      if (ok) switchView("viewResults");
     } catch (err) {
       showErrorModal("Upload Failed", err.message);
     }
@@ -1782,7 +1887,8 @@ function setupEventListeners() {
         toastMessage: `Applied ${data.neighborhood_count} zones.`
       });
       modalManual.classList.remove("active");
-      await runOptimization();
+      const ok = await runOptimization();
+      if (ok) switchView("viewResults");
     } catch (err) {
       alert(`Invalid JSON format: ${err.message}`);
     }
@@ -1814,46 +1920,66 @@ function setupEventListeners() {
   const btnConfirmSynth = document.getElementById("btnConfirmGenerateSynthetic");
   if (btnConfirmSynth) {
     btnConfirmSynth.addEventListener("click", async () => {
+      const promptText = document.getElementById("inputSynthPrompt")?.value?.trim() || "";
+      const scope = document.getElementById("selectSynthScope")?.value || "single_city";
       const zoneCount = parseInt(document.getElementById("inputSynthZones")?.value) || 50;
-      const pattern = document.getElementById("selectSynthPattern")?.value || "clustered";
-      const region = document.getElementById("selectSynthRegion")?.value || "bengaluru";
+      const region = document.getElementById("selectSynthRegion")?.value || "Bengaluru";
 
       btnConfirmSynth.disabled = true;
-      btnConfirmSynth.textContent = "Generating & Validating...";
+      btnConfirmSynth.textContent = "Sampling & Validating...";
 
       try {
+        const payload = {
+          session_id: appState.sessionId,
+          zone_count: zoneCount,
+          scope: scope,
+        };
+
+        if (promptText) {
+          payload.prompt = promptText;
+        } else {
+          payload.city_hint = region;
+          payload.region_name = region;
+          payload.pattern_hint = "clustered";
+          if (scope === "state") {
+            payload.region_filter = { country_code: "IN", state_name: region };
+          } else {
+            payload.region_filter = { country_code: "IN", city_name: region };
+          }
+        }
+
         const res = await fetch("/api/agent/generate-synthetic-data", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            zone_count: zoneCount,
-            pattern_hint: pattern,
-            city_hint: region,
-            session_id: appState.sessionId,
-          }),
+          body: JSON.stringify(payload),
         });
 
         const data = await res.json();
         btnConfirmSynth.disabled = false;
-        btnConfirmSynth.textContent = "Generate Synthetic Data";
+        btnConfirmSynth.textContent = "Generate & Sample Data";
 
         if (!res.ok) {
-          showErrorModal("Synthetic Generation Error", data.detail?.error || "Generation failed", data.detail?.errors || []);
+          showErrorModal("Sampler Generation Error", data.detail?.error || "Generation failed", data.detail?.errors || []);
           return;
         }
 
+        const badgeLabel = data.badge_text || (data.scope === "state" ? "[Real Towns, Synthetic Demand]" : "[Real City Anchor, Jittered Zones & Synthetic Demand]");
+
         applyCanonicalDataset(data, {
           isSynthetic: true,
-          source: "ai_synthetic",
-          toastMessage: `Generated & validated ${data.neighborhood_count} synthetic zones (${data.total_demand.toLocaleString()} orders/day) labeled [AI-Generated Synthetic Dataset].`
+          datasetType: "real_locations_synthetic_demand",
+          source: "real_locations_synthetic_demand",
+          badgeText: badgeLabel,
+          scope: data.scope,
+          toastMessage: `Sampled & validated ${data.neighborhood_count} zones (${data.total_demand.toLocaleString()} orders/day) labeled ${badgeLabel}.`
         });
 
         toggleAgentDrawer(false);
-        await runOptimization();
-        switchView("viewResults");
+        const ok = await runOptimization();
+        if (ok) switchView("viewResults");
       } catch (err) {
         btnConfirmSynth.disabled = false;
-        btnConfirmSynth.textContent = "Generate Synthetic Data";
+        btnConfirmSynth.textContent = "Generate & Sample Data";
         showErrorModal("Generation Failed", err.message);
       }
     });
@@ -1884,7 +2010,12 @@ function setupEventListeners() {
         boxAutoPMax.style.display = "flex";
         const sliderPMax = document.getElementById("inputConfigPMax");
         if (sliderPMax && appState.neighborhoods.length > 0) {
-          sliderPMax.max = Math.max(1, appState.neighborhoods.length);
+          sliderPMax.max = Math.min(20, Math.max(1, appState.neighborhoods.length));
+          if (parseInt(sliderPMax.value) > parseInt(sliderPMax.max)) {
+            sliderPMax.value = sliderPMax.max;
+          }
+          const valPMax = document.getElementById("valConfigPMax");
+          if (valPMax) valPMax.textContent = `${sliderPMax.value} sites`;
         }
       }
       updateLiveSummary();
@@ -1934,8 +2065,8 @@ function setupEventListeners() {
   });
 
   document.getElementById("btnConfigRunOptimization").addEventListener("click", async () => {
-    await runOptimization();
-    switchView("viewResults");
+    const ok = await runOptimization();
+    if (ok) switchView("viewResults");
   });
 
   // 7.5 Conversational Logistics Agent & Explain Mode (Phases 2, 3 & 4)
@@ -2032,13 +2163,22 @@ function setupEventListeners() {
       const tabId = btn.getAttribute("data-subtab");
       const targetPane = document.getElementById(tabId);
       if (targetPane) targetPane.classList.add("active");
+      if (tabId === "subtabExplain") {
+        const select = document.getElementById("selectExplainWarehouse");
+        if (select && select.value) {
+          loadExplainability(select.value);
+        }
+      }
     });
   });
 
   // Explainability Warehouse Select Dropdown
-  document.getElementById("selectExplainWarehouse").addEventListener("change", (e) => {
-    loadExplainability(e.target.value);
-  });
+  const selectExplainEl = document.getElementById("selectExplainWarehouse");
+  if (selectExplainEl) {
+    selectExplainEl.addEventListener("change", (e) => {
+      loadExplainability(e.target.value);
+    });
+  }
 
   // 9. Scenario Lab Presets
   document.getElementById("cardScenarioNormal").addEventListener("click", (e) => {

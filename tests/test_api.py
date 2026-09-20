@@ -267,3 +267,114 @@ def test_api_optimize_capacity_required_and_headroom_fields():
         assert w["capacity_ceiling"] == w["capacity"]
         assert w["capacity_required"] <= w["capacity_ceiling"]
 
+
+def test_api_explain_warehouse_fallback_and_synthetic():
+    """Validates /api/explain falls back gracefully when given a non-existent warehouse_id and works with synthetic datasets."""
+    # 1. Non-existent warehouse ID should gracefully fallback to the first open warehouse
+    res = client.get("/api/explain/non_existent_wid_999?session_id=default")
+    assert res.status_code == 200
+    data = res.json()
+    assert "warehouse_id" in data
+    assert "key_demand_drivers" in data
+    assert isinstance(data["key_demand_drivers"], list)
+
+    # 2. Test explain on synthetic dataset session
+    synth_req = {
+        "zone_count": 10,
+        "scope": "single_city",
+        "region_filter": {"city_name": "Pune", "country_code": "IN"},
+        "seed": 42,
+        "session_id": "test_synth_explain",
+    }
+    synth_res = client.post("/api/agent/generate-synthetic-data", json=synth_req)
+    assert synth_res.status_code == 200
+
+    # Request explain without manual optimization call first
+    explain_res = client.get("/api/explain/any_id?session_id=test_synth_explain")
+    assert explain_res.status_code == 200
+    explain_data = explain_res.json()
+    assert "warehouse_id" in explain_data
+    assert "key_demand_drivers" in explain_data
+    assert isinstance(explain_data["key_demand_drivers"], list)
+
+
+def test_generated_data_optimization_and_auto_size():
+    """Validates that 50-zone generated geodata can be optimized in Auto-Size mode and produces valid tradeoff & compare results."""
+    session_id = "test_gen_auto_size_50"
+    synth_req = {
+        "zone_count": 50,
+        "scope": "single_city",
+        "region_filter": {"city_name": "Bengaluru", "country_code": "IN"},
+        "seed": 99,
+        "session_id": session_id,
+    }
+    synth_res = client.post("/api/agent/generate-synthetic-data", json=synth_req)
+    assert synth_res.status_code == 200
+    synth_data = synth_res.json()
+    assert synth_data["neighborhood_count"] == 50
+    total_demand = synth_data["total_demand"]
+    assert total_demand > 10000
+
+    # Test Auto-Size optimization with scaled capacity
+    suggested_cap = (total_demand / 3.0) * 1.35
+    opt_payload = {
+        "session_id": session_id,
+        "auto_size": True,
+        "p_max": 6,
+        "warehouse_capacity": suggested_cap,
+        "cost_per_km": 1.25,
+        "fixed_cost_per_warehouse": 300.0,
+    }
+    opt_res = client.post("/api/optimize", json=opt_payload)
+    assert opt_res.status_code == 200
+    opt_data = opt_res.json()
+    assert opt_data["auto_size"] is True
+    assert 1 <= opt_data["p"] <= 6
+    assert len(opt_data["warehouses"]) == opt_data["p"]
+    assert opt_data["total_system_capacity"] >= opt_data["total_system_demand"]
+    assert "sizing_rationale" in opt_data
+    assert opt_data["sizing_rationale"] is not None
+
+    # Test Trade-off curve calculation on this 50-zone generated dataset
+    tradeoff_res = client.get(f"/api/tradeoff?session_id={session_id}")
+    assert tradeoff_res.status_code == 200
+    tradeoff_data = tradeoff_res.json()
+    assert len(tradeoff_data["points"]) > 0
+    # At least some points should be feasible
+    assert any(pt["is_feasible"] for pt in tradeoff_data["points"])
+
+    # Test Baseline comparison on this 50-zone generated dataset
+    compare_res = client.get(f"/api/compare?session_id={session_id}")
+    assert compare_res.status_code == 200
+    compare_data = compare_res.json()
+    assert compare_data["baseline"]["warehouses_count"] == 1
+    assert compare_data["optimized"]["warehouses_count"] == opt_data["p"]
+
+
+def test_generated_data_state_scope_optimization():
+    """Validates optimization on state-scoped geodata sampled across regional towns."""
+    session_id = "test_gen_state_opt"
+    synth_req = {
+        "zone_count": 25,
+        "scope": "state",
+        "region_filter": {"state_name": "Karnataka", "country_code": "IN"},
+        "seed": 101,
+        "session_id": session_id,
+    }
+    synth_res = client.post("/api/agent/generate-synthetic-data", json=synth_req)
+    assert synth_res.status_code == 200
+    synth_data = synth_res.json()
+    total_demand = synth_data["total_demand"]
+
+    opt_payload = {
+        "session_id": session_id,
+        "p": 3,
+        "warehouse_capacity": max(5000.0, (total_demand / 3.0) * 1.5),
+    }
+    opt_res = client.post("/api/optimize", json=opt_payload)
+    assert opt_res.status_code == 200
+    opt_data = opt_res.json()
+    assert opt_data["p"] == 3
+    assert len(opt_data["warehouses"]) == 3
+
+
