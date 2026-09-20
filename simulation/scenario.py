@@ -89,12 +89,12 @@ def run_scenario_simulation(
     locations_changed = base_open != scen_open
 
     # Cost calculation: distance_cost = sum(dist * orders) / avg_load * cost_per_km
-    # In straight-line mode: delivery cost approx = weighted_distance * cost_per_km / avg_orders_per_km
+    # In straight-line mode: delivery cost approx = weighted_distance * (cost_per_km / 50.0)
     base_w_dist = base_cflp.weighted_strategic_travel_time
     scen_w_dist = scenario_cflp.weighted_strategic_travel_time
 
-    base_deliv_cost = base_w_dist * (cost_per_km / 100.0)
-    scen_deliv_cost = scen_w_dist * (cost_per_km / 100.0)
+    base_deliv_cost = base_w_dist * (cost_per_km / 50.0)
+    scen_deliv_cost = scen_w_dist * (cost_per_km / 50.0)
 
     base_total = base_deliv_cost + (len(base_open) * fixed_cost_per_warehouse)
     scen_total = scen_deliv_cost + (len(scen_open) * fixed_cost_per_warehouse)
@@ -102,11 +102,20 @@ def run_scenario_simulation(
     cost_pct = safe_pct_change(scen_total, base_total)
     w_dist_pct = safe_pct_change(scen_w_dist, base_w_dist)
 
+    name_map = {n.id: n.name for n in base_neighborhoods}
+    for c in base_candidates:
+        if c.id not in name_map:
+            name_map[c.id] = c.name
+
+    failed_name = name_map.get(failed_warehouse_id) if failed_warehouse_id else None
+    orig_names = [name_map.get(wid, wid) for wid in base_open]
+    scen_names = [name_map.get(wid, wid) for wid in scen_open]
+
     scenario_label = []
     if demand_multiplier != 1.0:
         scenario_label.append(f"Demand {'+' if demand_multiplier > 1 else ''}{int((demand_multiplier-1)*100)}%")
     if failed_warehouse_id:
-        scenario_label.append(f"Warehouse Outage: {failed_warehouse_id}")
+        scenario_label.append(f"Warehouse Outage: {failed_name or failed_warehouse_id}")
 
     name = " & ".join(scenario_label) if scenario_label else "Baseline Demand"
 
@@ -115,9 +124,12 @@ def run_scenario_simulation(
         "scenario_name": name,
         "demand_multiplier": demand_multiplier,
         "failed_warehouse_id": failed_warehouse_id,
+        "failed_warehouse_name": failed_name,
         "locations_changed": locations_changed,
         "original_warehouses": base_open,
         "scenario_warehouses": scen_open,
+        "original_warehouse_names": orig_names,
+        "scenario_warehouse_names": scen_names,
         "original_cost": round(base_total, 2),
         "scenario_cost": round(scen_total, 2),
         "cost_pct_change": round(cost_pct, 1),

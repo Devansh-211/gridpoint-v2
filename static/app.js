@@ -691,7 +691,7 @@ function switchView(viewId) {
   // 4. Update Agent FAB Visibility (Visible only on Dashboard and Network Configuration)
   updateAgentFabVisibility(viewId);
 
-  // 5. Invalidate Map Sizes on View Switch (prevents Leaflet tile render glitches)
+  // 5. Invalidate Map Sizes & Trigger Dynamic Views on View Switch
   setTimeout(() => {
     if (viewId === "viewResults" && appState.maps.results) {
       appState.maps.results.invalidateSize();
@@ -699,6 +699,10 @@ function switchView(viewId) {
       appState.maps.demand.invalidateSize();
     } else if (viewId === "viewAnalytics" && appState.lastTradeoff) {
       renderTradeoffChart(appState.lastTradeoff);
+    } else if (viewId === "viewScenarios") {
+      updateScenarioView();
+    } else if (viewId === "viewDisruption") {
+      updateDisruptionView();
     }
   }, 100);
 }
@@ -859,6 +863,8 @@ function applyCanonicalDataset(data, options = {}) {
   renderDemandMap(data.preview);
   updateDashboardStats();
   updateLiveSummary();
+  updateScenarioCards();
+  updateDisruptionDropdown();
 
   if (options.toastMessage) {
     showToast(options.toastMessage);
@@ -1247,13 +1253,7 @@ function renderResultsScreen(data) {
   }
 
   // 6. Update Failed Facility Select for Disruption view
-  const selectFailed = document.getElementById("selectFailedFacility");
-  if (selectFailed) {
-    selectFailed.innerHTML = '<option value="">None (All Warehouses Operational)</option>';
-    data.warehouses.forEach(w => {
-      selectFailed.innerHTML += `<option value="${w.warehouse_id}">${w.name} (${w.warehouse_id})</option>`;
-    });
-  }
+  updateDisruptionDropdown();
 
   // 7. Dynamic Demand-Weighting Explainer Box
   updateDemandExplainerBox(data.assignments);
@@ -1635,16 +1635,76 @@ function updateDemandExplainerBox(assignments) {
 // 13. SCENARIO LAB & DISRUPTION SIMULATION (POST /api/scenario)
 // ============================================================================
 
+function updateScenarioCards() {
+  const nZones = appState.neighborhoods?.length || 36;
+  const totalDem = appState.neighborhoods?.reduce((s, n) => s + (n.daily_orders || 0), 0) || 10000;
+
+  const descNormal = document.getElementById("cardScenarioNormalDesc");
+  if (descNormal) {
+    descNormal.textContent = `Baseline demand across ${nZones} delivery zones (${totalDem.toLocaleString()} ord/day).`;
+  }
+  const descWeekend = document.getElementById("cardScenarioWeekendDesc");
+  if (descWeekend) {
+    descWeekend.textContent = `+20% weekend surge (${Math.round(totalDem * 1.2).toLocaleString()} ord/day) across ${nZones} zones.`;
+  }
+  const descFestival = document.getElementById("cardScenarioFestivalDesc");
+  if (descFestival) {
+    descFestival.textContent = `+50% festival surge (${Math.round(totalDem * 1.5).toLocaleString()} ord/day) capacity stress test.`;
+  }
+}
+
+function updateDisruptionDropdown() {
+  const selectFailed = document.getElementById("selectFailedFacility");
+  if (!selectFailed) return;
+
+  const prevVal = selectFailed.value;
+  selectFailed.innerHTML = "";
+
+  if (appState.lastOptimize && appState.lastOptimize.warehouses && appState.lastOptimize.warehouses.length > 0) {
+    appState.lastOptimize.warehouses.forEach(w => {
+      selectFailed.innerHTML += `<option value="${w.warehouse_id}">${w.name} (${w.warehouse_id}) &mdash; ${w.assigned_demand?.toLocaleString() || 0} ord/day</option>`;
+    });
+  } else if (appState.neighborhoods && appState.neighborhoods.length > 0) {
+    const candidates = appState.neighborhoods.slice(0, 5);
+    candidates.forEach(c => {
+      selectFailed.innerHTML += `<option value="${c.neighborhood_id}">${c.name} (${c.neighborhood_id})</option>`;
+    });
+  } else {
+    selectFailed.innerHTML = '<option value="">No facilities loaded</option>';
+  }
+
+  // Retain previous value if still present; otherwise select first facility
+  if (prevVal && Array.from(selectFailed.options).some(o => o.value === prevVal)) {
+    selectFailed.value = prevVal;
+  } else if (selectFailed.options.length > 0) {
+    selectFailed.selectedIndex = 0;
+  }
+}
+
+function updateScenarioView() {
+  updateScenarioCards();
+  const activeCard = document.querySelector(".gp-scenario-card.active") || document.getElementById("cardScenarioNormal");
+  const mult = activeCard ? (parseFloat(activeCard.getAttribute("data-mult")) || 1.0) : 1.0;
+  runScenarioSimulation(mult, null, "boxScenarioResults");
+}
+
+function updateDisruptionView() {
+  updateDisruptionDropdown();
+  const selectFailed = document.getElementById("selectFailedFacility");
+  const failedWid = selectFailed ? selectFailed.value : null;
+  runScenarioSimulation(1.0, failedWid, "boxDisruptionResults");
+}
+
 async function runScenarioSimulation(multiplier, failedWid = null, targetContainerId = "boxScenarioResults") {
   const box = document.getElementById(targetContainerId);
   if (!box) return;
 
   box.innerHTML = '<div style="text-align:center; padding:16px; color:var(--gp-text-tertiary);">Simulating network stress test...</div>';
 
-  const p = parseInt(document.getElementById("inputConfigP").value) || 3;
-  const cap = parseFloat(document.getElementById("inputConfigCap").value) || 4000;
-  const costKm = parseFloat(document.getElementById("inputCostKm").value) || 1.25;
-  const fixedCost = parseFloat(document.getElementById("inputFixedCost").value) || 300;
+  const p = (appState.lastOptimize && appState.lastOptimize.assumptions?.warehouse_count) || parseInt(document.getElementById("inputConfigP")?.value) || 3;
+  const cap = (appState.lastOptimize && appState.lastOptimize.assumptions?.warehouse_capacity) || parseFloat(document.getElementById("inputConfigCap")?.value) || 4000;
+  const costKm = (appState.lastOptimize && appState.lastOptimize.assumptions?.cost_per_km) || parseFloat(document.getElementById("inputCostKm")?.value) || 1.25;
+  const fixedCost = (appState.lastOptimize && appState.lastOptimize.assumptions?.fixed_cost_per_warehouse) || parseFloat(document.getElementById("inputFixedCost")?.value) || 300;
 
   const payload = {
     session_id: appState.sessionId,
@@ -1672,6 +1732,24 @@ async function runScenarioSimulation(multiplier, failedWid = null, targetContain
 
     appState.lastScenario = data;
 
+    const nZones = appState.neighborhoods?.length || 36;
+    let disruptionBanner = "";
+    if (data.failed_warehouse_name || failedWid) {
+      const fname = data.failed_warehouse_name || failedWid;
+      disruptionBanner = `
+        <div style="background:var(--gp-danger-bg, #FEF2F2); border:1px solid var(--gp-danger-border, #FECACA); border-radius:var(--gp-radius-sm); padding:10px 14px; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--gp-danger);"></span>
+            <span style="font-size:13px; font-weight:700; color:var(--gp-danger);">OUTAGE CONTINGENCY:</span>
+            <span style="font-size:13px; font-weight:600; color:var(--gp-text-primary);">${fname} (${failedWid || data.failed_warehouse_id})</span>
+          </div>
+          <div style="font-size:12px; color:var(--gp-text-secondary);">
+            Failover absorbed by <strong>${(data.scenario_warehouse_names && data.scenario_warehouse_names.length) ? data.scenario_warehouse_names.join(", ") : data.scenario_warehouses.join(", ")}</strong>
+          </div>
+        </div>
+      `;
+    }
+
     let warningHtml = "";
     if (data.locations_changed) {
       warningHtml = `<div style="background:var(--gp-warning-bg); border:1px solid var(--gp-warning-border); padding:8px 12px; border-radius:var(--gp-radius-sm); color:var(--gp-warning); font-weight:700; margin-bottom:10px; font-size:13px;">
@@ -1680,6 +1758,7 @@ async function runScenarioSimulation(multiplier, failedWid = null, targetContain
     }
 
     box.innerHTML = `
+      ${disruptionBanner}
       ${warningHtml}
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:var(--gp-space-3); margin-bottom:var(--gp-space-3);">
         <div style="background:var(--gp-surface); border:1px solid var(--gp-border); padding:var(--gp-space-3); border-radius:var(--gp-radius-sm);">
@@ -1697,14 +1776,18 @@ async function runScenarioSimulation(multiplier, failedWid = null, targetContain
         </div>
 
         <div style="background:var(--gp-surface); border:1px solid var(--gp-border); padding:var(--gp-space-3); border-radius:var(--gp-radius-sm);">
-          <div style="font-size:11px; color:var(--gp-text-tertiary); text-transform:uppercase; font-weight:600;">Active Warehouses</div>
+          <div style="font-size:11px; color:var(--gp-text-tertiary); text-transform:uppercase; font-weight:600;">${failedWid ? 'Surviving Warehouses' : 'Active Warehouses'}</div>
           <div style="font-size:18px; font-weight:700; color:var(--gp-text-primary); margin-top:2px;">${data.scenario_warehouses.length} sites</div>
-          <div style="font-size:11px; color:var(--gp-text-tertiary);">${data.scenario_warehouses.join(", ")}</div>
+          <div style="font-size:11px; color:var(--gp-text-tertiary);">${(data.scenario_warehouse_names && data.scenario_warehouse_names.length) ? data.scenario_warehouse_names.join(", ") : data.scenario_warehouses.join(", ")}</div>
         </div>
       </div>
 
       <div style="font-size:12px; color:var(--gp-text-secondary); line-height:1.5;">
-        ${data.diagnostics.length > 0 ? data.diagnostics.join("<br>") : "All 36 delivery zones remain 100% serviceable within capacity."}
+        ${data.diagnostics && data.diagnostics.length > 0 ? data.diagnostics.join("<br>") : (
+          failedWid
+            ? `Contingency Plan: All ${nZones} delivery zones successfully failover-reassigned to remaining operational warehouses without stockout.`
+            : `All ${nZones} delivery zones remain 100% serviceable within capacity.`
+        )}
       </div>
     `;
 
@@ -2198,10 +2281,21 @@ function setupEventListeners() {
   });
 
   // 10. Disruption View Simulation
-  document.getElementById("btnSimulateOutage").addEventListener("click", () => {
-    const failedWid = document.getElementById("selectFailedFacility").value || null;
-    runScenarioSimulation(1.0, failedWid, "boxDisruptionResults");
-  });
+  const selectFailedEl = document.getElementById("selectFailedFacility");
+  if (selectFailedEl) {
+    selectFailedEl.addEventListener("change", (e) => {
+      const failedWid = e.target.value || null;
+      runScenarioSimulation(1.0, failedWid, "boxDisruptionResults");
+    });
+  }
+
+  const btnSimulateOutage = document.getElementById("btnSimulateOutage");
+  if (btnSimulateOutage) {
+    btnSimulateOutage.addEventListener("click", () => {
+      const failedWid = document.getElementById("selectFailedFacility")?.value || null;
+      runScenarioSimulation(1.0, failedWid, "boxDisruptionResults");
+    });
+  }
 
   // 11. Tactical Fleet CVRP Solve Button
   document.getElementById("btnFleetRecompute").addEventListener("click", async () => {

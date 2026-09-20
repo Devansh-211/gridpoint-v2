@@ -749,12 +749,35 @@ def run_scenario(req: ScenarioRequest):
     """Evaluates a demand shock (+20%, +50%) or warehouse outage scenario."""
     session = _get_or_load_default_session(req.session_id or "default")
     neighborhoods: List[Neighborhood] = session["neighborhoods"]
-    effective_capacity = req.warehouse_capacity * max(1.0, req.demand_multiplier)
+    total_demand = sum(n.daily_orders for n in neighborhoods)
+
+    last_opt: Optional[OptimizeResponse] = session.get("last_optimize")
+
+    p_to_use = req.p if req.p and req.p >= 1 else 3
+    if last_opt and last_opt.p and (req.p == 3 or req.p is None):
+        p_to_use = last_opt.p
+
+    # Determine safe base capacity if req.warehouse_capacity was left at default on large dataset
+    min_needed_cap = (total_demand / max(1, p_to_use)) * 1.35
+    base_cap = max(req.warehouse_capacity, min_needed_cap) if req.warehouse_capacity <= 4000.0 and total_demand > 10000.0 else req.warehouse_capacity
+    effective_capacity = base_cap * max(1.0, req.demand_multiplier)
+
     candidates = [
-        WarehouseCandidate(id=n.id, name=n.name, latitude=n.latitude, longitude=n.longitude, capacity=effective_capacity)
+        WarehouseCandidate(
+            id=n.id,
+            name=n.name,
+            latitude=n.latitude,
+            longitude=n.longitude,
+            capacity=(n.capacity * max(1.0, req.demand_multiplier)) if (n.capacity is not None and n.capacity > 0) else effective_capacity,
+        )
         for n in neighborhoods
     ]
-    matrix = get_matrix(neighborhoods, mode="haversine")
+
+    routing_mode = last_opt.assumptions.get("routing_mode", "haversine") if (last_opt and last_opt.assumptions) else "haversine"
+    matrix = get_matrix(neighborhoods, mode=routing_mode)
+
+    cost_per_km = last_opt.assumptions.get("cost_per_km", req.cost_per_km) if (last_opt and last_opt.assumptions) else req.cost_per_km
+    fixed_cost = last_opt.assumptions.get("fixed_cost_per_warehouse", req.fixed_cost_per_warehouse) if (last_opt and last_opt.assumptions) else req.fixed_cost_per_warehouse
 
     res = run_scenario_simulation(
         base_neighborhoods=neighborhoods,
@@ -762,10 +785,10 @@ def run_scenario(req: ScenarioRequest):
         matrix=matrix,
         demand_multiplier=req.demand_multiplier,
         failed_warehouse_id=req.warehouse_failure_id,
-        p_warehouses=req.p,
+        p_warehouses=p_to_use,
         warehouse_capacity=effective_capacity,
-        cost_per_km=req.cost_per_km,
-        fixed_cost_per_warehouse=req.fixed_cost_per_warehouse,
+        cost_per_km=cost_per_km,
+        fixed_cost_per_warehouse=fixed_cost,
     )
 
     if not res.get("success", False):

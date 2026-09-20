@@ -378,3 +378,64 @@ def test_generated_data_state_scope_optimization():
     assert len(opt_data["warehouses"]) == 3
 
 
+def test_api_scenario_facility_failure_disruption():
+    """Validates /api/scenario correctly handles warehouse failure and populates friendly names."""
+    # Run baseline optimization first
+    opt_res = client.post("/api/optimize", json={"session_id": "default", "p": 3, "warehouse_capacity": 4000.0})
+    assert opt_res.status_code == 200
+    opt_data = opt_res.json()
+    failed_wid = opt_data["warehouses"][0]["warehouse_id"]
+    failed_wname = opt_data["warehouses"][0]["name"]
+
+    payload = {
+        "session_id": "default",
+        "demand_multiplier": 1.0,
+        "warehouse_failure_id": failed_wid,
+        "p": 3,
+        "warehouse_capacity": 6000.0,
+    }
+    res = client.post("/api/scenario", json=payload)
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["failed_warehouse_id"] == failed_wid
+    assert data["failed_warehouse_name"] == failed_wname
+    assert len(data["original_warehouses"]) == 3
+    assert len(data["original_warehouse_names"]) == 3
+    # Surviving warehouses must not include the failed warehouse
+    assert failed_wid not in data["scenario_warehouses"]
+    assert len(data["scenario_warehouses"]) >= 1
+    assert len(data["scenario_warehouse_names"]) == len(data["scenario_warehouses"])
+
+
+def test_api_scenario_on_generated_dataset():
+    """Validates /api/scenario executes properly on a generated geodata dataset."""
+    session_id = "test_gen_scenario"
+    synth_req = {
+        "zone_count": 30,
+        "scope": "city",
+        "region_filter": {"city_name": "Bengaluru", "country_code": "IN"},
+        "seed": 42,
+        "session_id": session_id,
+    }
+    synth_res = client.post("/api/agent/generate-synthetic-data", json=synth_req)
+    assert synth_res.status_code == 200
+
+    # Optimize on this dataset
+    opt_res = client.post("/api/optimize", json={"session_id": session_id, "p": 3})
+    assert opt_res.status_code == 200
+    opt_data = opt_res.json()
+
+    # Run 1.2x surge scenario
+    scenario_res = client.post("/api/scenario", json={
+        "session_id": session_id,
+        "demand_multiplier": 1.2,
+    })
+    assert scenario_res.status_code == 200
+    sc_data = scenario_res.json()
+    assert sc_data["demand_multiplier"] == 1.2
+    assert sc_data["scenario_cost"] > 0
+    assert len(sc_data["scenario_warehouses"]) >= 1
+
+
+

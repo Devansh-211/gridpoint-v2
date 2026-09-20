@@ -169,9 +169,12 @@ class ScenarioResponse(BaseModel):
     scenario_name: str
     demand_multiplier: float
     failed_warehouse_id: Optional[str]
+    failed_warehouse_name: Optional[str] = None
     locations_changed: bool
     original_warehouses: List[str]
     scenario_warehouses: List[str]
+    original_warehouse_names: List[str] = []
+    scenario_warehouse_names: List[str] = []
     original_cost: float
     scenario_cost: float
     cost_pct_change: float
