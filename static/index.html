@@ -447,11 +447,19 @@
                   <!-- Auto-Size Mode: Upper Ceiling (p_max) -->
                   <div class="gp-form-group" id="containerAutoPMax" style="display:none;">
                     <div class="gp-label">
-                      <span>Max Warehouses to Consider (p_max)</span>
+                      <div style="display:flex; align-items:center; gap:var(--gp-space-2);">
+                        <span>Max Warehouses to Consider (p_max)</span>
+                        <span class="gp-badge gp-badge-estimate" id="badgeAutoMinP" style="font-size:10px;">Min: 3 sites</span>
+                      </div>
                       <span class="gp-label-val" id="valConfigPMax">6 sites</span>
                     </div>
                     <input type="range" class="gp-range" id="inputConfigPMax" min="1" max="20" value="6" step="1">
-                    <div style="font-size:11px; color:var(--gp-text-tertiary); margin-top:2px;">Solver determines cost-minimizing count k ≤ p_max trading off transit vs lease costs.</div>
+                    <div style="font-size:11px; color:var(--gp-text-tertiary); margin-top:2px;">Upper ceiling for the solver. The solver tests counts between minimum required and p_max.</div>
+                    
+                    <div style="background:var(--gp-surface-sunken); border:1px solid var(--gp-primary-200, #BFDBFE); border-radius:var(--gp-radius-sm); padding:10px 12px; margin-top:6px; font-size:12px; color:var(--gp-text-secondary); line-height:1.4;">
+                      <div style="font-weight:700; color:var(--gp-primary-600); margin-bottom:2px;">⚡ Automated Cost-Minimizing Optimizer</div>
+                      Evaluating configurations up to <strong id="autoCeilingNote">6</strong> sites to minimize <strong>Daily Transit Cost ($/km) + Facility Leases ($/site)</strong>.
+                    </div>
                   </div>
 
                   <div class="gp-form-group">

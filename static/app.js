@@ -703,6 +703,9 @@ function switchView(viewId) {
       updateScenarioView();
     } else if (viewId === "viewDisruption") {
       updateDisruptionView();
+    } else if (viewId === "viewConfig") {
+      updateConfigMinBounds();
+      updateLiveSummary();
     }
   }, 100);
 }
@@ -865,6 +868,7 @@ function applyCanonicalDataset(data, options = {}) {
   updateLiveSummary();
   updateScenarioCards();
   updateDisruptionDropdown();
+  updateConfigMinBounds();
 
   if (options.toastMessage) {
     showToast(options.toastMessage);
@@ -965,6 +969,40 @@ function renderDemandMap(neighborhoods) {
 // 6. NETWORK OPTIMIZATION SOLVER (POST /api/optimize)
 // ============================================================================
 
+function updateConfigMinBounds() {
+  const nZones = appState.neighborhoods ? appState.neighborhoods.length : 36;
+  const totalDem = appState.neighborhoods ? appState.neighborhoods.reduce((s, n) => s + (n.daily_orders || 0), 0) : 10000;
+  const cap = parseFloat(document.getElementById("inputConfigCap")?.value) || 4000;
+  const minP = Math.max(1, Math.min(nZones, Math.ceil(totalDem / Math.max(1, cap))));
+
+  const badgeMin = document.getElementById("badgeAutoMinP");
+  if (badgeMin) badgeMin.textContent = `Min feasible: ${minP} sites`;
+
+  const sliderPMax = document.getElementById("inputConfigPMax");
+  if (sliderPMax) {
+    sliderPMax.min = minP;
+    sliderPMax.max = Math.min(20, Math.max(minP, nZones));
+    if (parseInt(sliderPMax.value) < minP) {
+      sliderPMax.value = minP;
+    }
+    const valPMax = document.getElementById("valConfigPMax");
+    if (valPMax) valPMax.textContent = `${sliderPMax.value} sites`;
+    const noteEl = document.getElementById("autoCeilingNote");
+    if (noteEl) noteEl.textContent = sliderPMax.value;
+  }
+
+  const sliderP = document.getElementById("inputConfigP");
+  if (sliderP) {
+    sliderP.min = minP;
+    sliderP.max = Math.min(20, Math.max(minP, nZones));
+    if (parseInt(sliderP.value) < minP) {
+      sliderP.value = minP;
+      const valP = document.getElementById("valConfigP");
+      if (valP) valP.textContent = `${minP} sites`;
+    }
+  }
+}
+
 async function runOptimization() {
   if (!appState.neighborhoods || appState.neighborhoods.length === 0) {
     showErrorModal(
@@ -1026,12 +1064,25 @@ async function runOptimization() {
     appState.lastOptimize = data;
     appState.explainCache = {};
 
+    if (data.auto_size) {
+      const elP = document.getElementById("inputConfigP");
+      if (elP) {
+        elP.value = data.p;
+        const valP = document.getElementById("valConfigP");
+        if (valP) valP.textContent = `${data.p} sites`;
+        agentState.knownParams.warehouse_count = data.p;
+      }
+    }
+
     renderResultsScreen(data);
     await fetchBaselineComparison();
     await fetchTradeoffCurve();
     updateDashboardStats();
 
-    showToast(`Network Optimized: ${data.p} warehouses serving ${data.assignments.length} delivery zones.`);
+    showToast(data.auto_size 
+      ? `Auto-Sized: Optimal network uses ${data.p} warehouses.` 
+      : `Network Optimized: ${data.p} warehouses serving ${data.assignments.length} delivery zones.`
+    );
     return true;
   } catch (err) {
     showErrorModal("Network Request Failed", err.message);
@@ -2091,15 +2142,7 @@ function setupEventListeners() {
       if (boxManualP) boxManualP.style.display = "none";
       if (boxAutoPMax) {
         boxAutoPMax.style.display = "flex";
-        const sliderPMax = document.getElementById("inputConfigPMax");
-        if (sliderPMax && appState.neighborhoods.length > 0) {
-          sliderPMax.max = Math.min(20, Math.max(1, appState.neighborhoods.length));
-          if (parseInt(sliderPMax.value) > parseInt(sliderPMax.max)) {
-            sliderPMax.value = sliderPMax.max;
-          }
-          const valPMax = document.getElementById("valConfigPMax");
-          if (valPMax) valPMax.textContent = `${sliderPMax.value} sites`;
-        }
+        updateConfigMinBounds();
       }
       updateLiveSummary();
     });
@@ -2119,6 +2162,8 @@ function setupEventListeners() {
   if (inputPMax) {
     inputPMax.addEventListener("input", (e) => {
       document.getElementById("valConfigPMax").textContent = `${e.target.value} sites`;
+      const noteEl = document.getElementById("autoCeilingNote");
+      if (noteEl) noteEl.textContent = e.target.value;
       updateLiveSummary();
     });
   }
@@ -2126,6 +2171,7 @@ function setupEventListeners() {
   const inputCap = document.getElementById("inputConfigCap");
   inputCap.addEventListener("input", (e) => {
     document.getElementById("valConfigCap").textContent = `${Number(e.target.value).toLocaleString()} orders/day`;
+    updateConfigMinBounds();
     updateLiveSummary();
     agentState.knownParams.warehouse_capacity = parseInt(e.target.value) || 4000;
   });
